@@ -49,9 +49,6 @@ namespace Underwater
         private GUIStyle speechBubbleShadowStyle;
         private GUIStyle loadingTitleStyle;
         private GUIStyle loadingStatusStyle;
-        private GUIStyle demoHudPanelStyle;
-        private GUIStyle demoHudTextStyle;
-        private GUIStyle demoHudKeyStyle;
         private GUIStyle miniMapPanelStyle;
         private Texture2D miniMapPlayerDotTexture;
         private Texture2D miniMapActiveAnimalDotTexture;
@@ -207,7 +204,6 @@ namespace Underwater
             }
 
             EnsureGuiStyles();
-            DrawDemoHud();
             DrawMiniMap();
 
             if (worldSyncLoading)
@@ -840,44 +836,6 @@ namespace Underwater
                 normal = { textColor = new Color(0.76f, 0.95f, 1f) }
             };
 
-            demoHudPanelStyle = new GUIStyle(GUI.skin.box)
-            {
-                border = new RectOffset(12, 12, 12, 12),
-                padding = new RectOffset(14, 14, 10, 10)
-            };
-            demoHudPanelStyle.normal.background = CreateRoundedRectTexture(
-                36,
-                36,
-                10f,
-                new Color(0.01f, 0.05f, 0.07f, 0.82f),
-                new Color(0.18f, 0.86f, 0.9f, 0.52f),
-                1f);
-
-            demoHudTextStyle = new GUIStyle(labelStyle)
-            {
-                fontSize = 12,
-                wordWrap = false,
-                clipping = TextClipping.Clip,
-                normal = { textColor = new Color(0.9f, 0.98f, 1f) }
-            };
-
-            demoHudKeyStyle = new GUIStyle(demoHudTextStyle)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                fontStyle = FontStyle.Bold,
-                wordWrap = false,
-                clipping = TextClipping.Clip,
-                padding = new RectOffset(4, 4, 1, 2),
-                normal = { textColor = new Color(0.02f, 0.12f, 0.14f) }
-            };
-            demoHudKeyStyle.normal.background = CreateRoundedRectTexture(
-                28,
-                22,
-                6f,
-                new Color(0.68f, 1f, 0.96f, 0.96f),
-                new Color(1f, 1f, 1f, 0.65f),
-                1f);
-
             miniMapPanelStyle = new GUIStyle(GUI.skin.box)
             {
                 border = new RectOffset(18, 18, 18, 18),
@@ -894,26 +852,6 @@ namespace Underwater
             miniMapPlayerDotTexture = CreateCircleTexture(18, new Color(0.95f, 1f, 0.92f, 1f), new Color(0.12f, 0.25f, 0.23f, 1f), 2f);
             miniMapActiveAnimalDotTexture = CreateCircleTexture(14, new Color(0.2f, 0.95f, 1f, 0.96f), new Color(0.78f, 1f, 1f, 0.82f), 1f);
             miniMapArchivedAnimalDotTexture = CreateCircleTexture(12, new Color(1f, 0.72f, 0.32f, 0.95f), new Color(1f, 0.92f, 0.64f, 0.78f), 1f);
-        }
-
-        private void DrawDemoHud()
-        {
-            float width = Mathf.Min(360f, Mathf.Max(284f, Screen.width - 24f));
-            float height = 44f;
-            Rect panelRect = new Rect(12f, 12f, width, height);
-            float x = panelRect.x + 14f;
-            float y = panelRect.y + 12f;
-
-            GUI.Box(panelRect, GUIContent.none, demoHudPanelStyle);
-            DrawHudControl(x, y, "E", "Spawn agent");
-            DrawHudControl(x + 132f, y, "Hold V", "to Ask agent");
-        }
-
-        private void DrawHudControl(float x, float y, string key, string label)
-        {
-            float keyWidth = key.Length > 1 ? 58f : 26f;
-            GUI.Label(new Rect(x, y, keyWidth, 20f), key, demoHudKeyStyle);
-            GUI.Label(new Rect(x + keyWidth + 6f, y + 1f, 112f, 20f), label, demoHudTextStyle);
         }
 
         private void DrawMiniMap()
