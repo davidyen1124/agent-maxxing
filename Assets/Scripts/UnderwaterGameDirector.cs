@@ -15,6 +15,15 @@ namespace Underwater
     {
         private const string ReefTaskTitlePrefix = "Underwater reef task ";
         private const string ReefTaskCounterPrefsKey = "Underwater.ReefTask.NextThreadNumber";
+        private const float TerrainModeMaxCameraFarClip = 2200f;
+        private const float TerrainModeMinCameraFarClip = 900f;
+        private const float TerrainModeShadowDistance = 90f;
+        private const float TerrainModeTreeDistance = 520f;
+        private const float TerrainModeTreeBillboardDistance = 90f;
+        private const float TerrainModeDetailDistance = 70f;
+        private const float TerrainModeDetailDensity = 0.42f;
+        private const float TerrainModeHeightmapPixelError = 9f;
+        private const float TerrainModeBasemapDistance = 180f;
 
         [SerializeField] private string defaultOpenAiRealtimeModel = "gpt-realtime-2";
         [SerializeField] private string defaultOpenAiRealtimeVoice = "marin";
@@ -1571,14 +1580,61 @@ namespace Underwater
 
             if (camera != null)
             {
-                camera.farClipPlane = Mathf.Max(camera.farClipPlane, Mathf.Max(PlayBounds.size.x, PlayBounds.size.z) * 1.5f);
+                float targetFarClip = Mathf.Clamp(
+                    Mathf.Max(PlayBounds.size.x, PlayBounds.size.z) * 0.65f,
+                    TerrainModeMinCameraFarClip,
+                    TerrainModeMaxCameraFarClip);
+                camera.farClipPlane = Mathf.Min(camera.farClipPlane, targetFarClip);
                 camera.fieldOfView = 72f;
+                camera.allowHDR = false;
+
+                if (camera.TryGetComponent(out UniversalAdditionalCameraData cameraData))
+                {
+                    cameraData.renderPostProcessing = false;
+                    cameraData.antialiasing = AntialiasingMode.FastApproximateAntialiasing;
+                }
             }
 
+            QualitySettings.shadowDistance = Mathf.Min(QualitySettings.shadowDistance, TerrainModeShadowDistance);
+            ApplyTerrainPerformanceProfile();
             DisableDemoRoot("VirtualCameras");
             DisableDemoRoot("Timelines");
             DisableDemoRoot("UI");
             DisableDemoRoot("EventSystem");
+        }
+
+        private void ApplyTerrainPerformanceProfile()
+        {
+            if (sceneTerrains == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < sceneTerrains.Length; i++)
+            {
+                Terrain terrain = sceneTerrains[i];
+
+                if (terrain == null)
+                {
+                    continue;
+                }
+
+                terrain.drawInstanced = true;
+                terrain.heightmapPixelError = Mathf.Max(terrain.heightmapPixelError, TerrainModeHeightmapPixelError);
+                terrain.basemapDistance = CapPositive(terrain.basemapDistance, TerrainModeBasemapDistance);
+                terrain.treeDistance = CapPositive(terrain.treeDistance, TerrainModeTreeDistance);
+                terrain.treeBillboardDistance = CapPositive(terrain.treeBillboardDistance, TerrainModeTreeBillboardDistance);
+                terrain.treeMaximumFullLODCount = terrain.treeMaximumFullLODCount <= 0
+                    ? 24
+                    : Mathf.Min(terrain.treeMaximumFullLODCount, 24);
+                terrain.detailObjectDistance = CapPositive(terrain.detailObjectDistance, TerrainModeDetailDistance);
+                terrain.detailObjectDensity = CapPositive(terrain.detailObjectDensity, TerrainModeDetailDensity);
+            }
+        }
+
+        private static float CapPositive(float currentValue, float maxValue)
+        {
+            return currentValue <= 0f ? maxValue : Mathf.Min(currentValue, maxValue);
         }
 
         private static void DisableDemoRoot(string objectName)
