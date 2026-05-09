@@ -1,0 +1,20 @@
+* text=auto eol=lf
+
+# Treat Unity YAML assets as text and route merges through Unity Smart Merge.
+*.unity text merge=unityyamlmerge
+*.prefab text merge=unityyamlmerge
+*.asset text merge=unityyamlmerge
+*.mat text merge=unityyamlmerge
+*.anim text merge=unityyamlmerge
+*.controller text merge=unityyamlmerge
+*.overrideController text merge=unityyamlmerge
+*.playable text merge=unityyamlmerge
+*.mask text merge=unityyamlmerge
+*.meta text
+
+# Common code and shader files
+*.cs text diff=csharp
+*.shader text
+*.cginc text
+*.hlsl text
+*.compute text
