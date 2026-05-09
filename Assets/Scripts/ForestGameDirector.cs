@@ -46,6 +46,7 @@ namespace Forest
         private readonly Dictionary<string, ArchivedThreadAnimal> archivedAnimals = new Dictionary<string, ArchivedThreadAnimal>();
         private readonly ConcurrentQueue<AtmosphereCommand> pendingAtmosphereCommands = new ConcurrentQueue<AtmosphereCommand>();
         private readonly ConcurrentQueue<WorkThreadCommand> pendingWorkThreadCommands = new ConcurrentQueue<WorkThreadCommand>();
+        private readonly ConcurrentQueue<WebsiteCommand> pendingWebsiteCommands = new ConcurrentQueue<WebsiteCommand>();
 
         private GUIStyle labelStyle;
         private GUIStyle threadTagStyle;
@@ -54,6 +55,7 @@ namespace Forest
         private GUIStyle loadingTitleStyle;
         private GUIStyle loadingStatusStyle;
         private GUIStyle miniMapPanelStyle;
+        private GUIStyle websitePanelStyle;
         private Texture2D miniMapPlayerDotTexture;
         private Texture2D miniMapActiveAnimalDotTexture;
         private Texture2D miniMapArchivedAnimalDotTexture;
@@ -75,6 +77,7 @@ namespace Forest
         private AudioSource niaVoiceAudioSource;
         private ForestUserSettings apiSettings;
         private OpenAIRealtimeClient realtimeClient;
+        private DirectWebsiteBuildClient websiteBuildClient;
         private Coroutine worldSyncRoutine;
         private Coroutine demoThreadFallbackRoutine;
         private Coroutine niaVoiceCaptureRoutine;
@@ -101,6 +104,12 @@ namespace Forest
         private string atmosphereWeather = "clear";
         private float atmosphereIntensity = DefaultAtmosphereIntensity;
         private string atmosphereMood = "calm";
+        private GameObject sandboxBox;
+        private Material sandboxBoxMaterial;
+        private bool websiteBuildInFlight;
+        private string websiteBuildStatusLine = "Sandbox box idle";
+        private string websitePreviewUrl = string.Empty;
+        private string websiteDeployedUrl = string.Empty;
 
         private sealed class QueuedWorldSync
         {
@@ -117,6 +126,14 @@ namespace Forest
             public string phase;
             public float distance;
             public float angle;
+        }
+
+        private sealed class WebsiteCommand
+        {
+            public string jobId;
+            public string idea;
+            public string style;
+            public string siteType;
         }
 
         private sealed class AtmosphereCommand
@@ -178,6 +195,7 @@ namespace Forest
             ConfigureAtmosphereController();
             ApplyAtmosphereProfile();
             CreatePlayer();
+            CreateSandboxBox();
             ReloadApiSettings();
             _ = WarmRealtimeVoiceSessionAsync();
             AttachForestBridge(true);
@@ -188,6 +206,8 @@ namespace Forest
         {
             DrainAtmosphereCommands();
             DrainWorkThreadCommands();
+            DrainWebsiteCommands();
+            UpdateSandboxBoxVisual();
             UpdateAtmosphereEmitterPosition();
             UpdateNearestThreadStatus();
         }
@@ -240,6 +260,7 @@ namespace Forest
             {
                 DrawThreadNameTags();
             }
+            DrawWebsiteBuildPanel();
         }
 
         public void ToggleThreadHudVisibility()
@@ -730,6 +751,20 @@ namespace Forest
             LogRealtimeVoice("Microphone capture stopped by player.");
         }
 
+        public void OpenLatestWebsiteFromPlayer()
+        {
+            string url = string.IsNullOrWhiteSpace(websiteDeployedUrl) ? websitePreviewUrl : websiteDeployedUrl;
+
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                SetWebsiteBuildStatus("No website is ready yet.");
+                return;
+            }
+
+            Application.OpenURL(url);
+            SetWebsiteBuildStatus($"Opened website: {Shorten(url, 72)}");
+        }
+
         private void PauseRealtimeVoicePlayback()
         {
             if (niaVoiceAudioSource == null || !niaVoiceAudioSource.isPlaying)
@@ -745,6 +780,7 @@ namespace Forest
             apiSettings = ForestUserSettings.Load();
             string openAiRealtimeModel = apiSettings.OpenAiRealtimeModelOr(defaultOpenAiRealtimeModel);
             NiaApiClient configuredNiaClient = CreateNiaClient(apiSettings);
+            websiteBuildClient = new DirectWebsiteBuildClient(apiSettings);
 
             if (realtimeClient == null || !realtimeClient.Matches(apiSettings.openAiApiKey, openAiRealtimeModel))
             {
@@ -758,7 +794,8 @@ namespace Forest
                     openAiRealtimeModel,
                     configuredNiaClient,
                     HandleRealtimeWorldCommand,
-                    HandleRealtimeWorkThreadCommand);
+                    HandleRealtimeWorkThreadCommand,
+                    HandleRealtimeWebsiteCommandAsync);
             }
             else
             {
@@ -1004,6 +1041,22 @@ namespace Forest
                 new Color(0.18f, 0.86f, 0.9f, 0.5f),
                 1f);
 
+            websitePanelStyle = new GUIStyle(GUI.skin.box)
+            {
+                alignment = TextAnchor.UpperLeft,
+                fontSize = 13,
+                wordWrap = true,
+                padding = new RectOffset(12, 12, 10, 10),
+                normal = { textColor = new Color(0.88f, 1f, 0.98f) }
+            };
+            websitePanelStyle.normal.background = CreateRoundedRectTexture(
+                44,
+                44,
+                12f,
+                new Color(0.02f, 0.09f, 0.11f, 0.84f),
+                new Color(0.24f, 0.98f, 0.76f, 0.55f),
+                1f);
+
             miniMapPlayerDotTexture = CreateCircleTexture(18, new Color(0.95f, 1f, 0.92f, 1f), new Color(0.12f, 0.25f, 0.23f, 1f), 2f);
             miniMapActiveAnimalDotTexture = CreateCircleTexture(14, new Color(0.2f, 0.95f, 1f, 0.96f), new Color(0.78f, 1f, 1f, 0.82f), 1f);
             miniMapArchivedAnimalDotTexture = CreateCircleTexture(12, new Color(1f, 0.72f, 0.32f, 0.95f), new Color(1f, 0.92f, 0.64f, 0.78f), 1f);
@@ -1043,6 +1096,22 @@ namespace Forest
             }
 
             DrawTextureCentered(center, miniMapPlayerDotTexture, 12f);
+        }
+
+        private void DrawWebsiteBuildPanel()
+        {
+            if (string.IsNullOrWhiteSpace(websiteBuildStatusLine)
+                || string.Equals(websiteBuildStatusLine, "Sandbox box idle", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            string url = string.IsNullOrWhiteSpace(websiteDeployedUrl) ? websitePreviewUrl : websiteDeployedUrl;
+            string text = string.IsNullOrWhiteSpace(url)
+                ? $"Sandbox Box\n{websiteBuildStatusLine}"
+                : $"Sandbox Box\n{websiteBuildStatusLine}\n{url}";
+            Rect rect = new Rect(14f, Screen.height - 112f, Mathf.Min(520f, Screen.width - 28f), 96f);
+            GUI.Box(rect, text, websitePanelStyle);
         }
 
         private void DrawMiniMapDot(Vector3 worldPosition, Vector2 center, float radius, float mapRangeMeters, Texture2D texture, float size)
@@ -1622,12 +1691,14 @@ namespace Forest
             StringBuilder prompt = new StringBuilder();
             prompt.Append("You are the voice assistant inside a Unity game named Forest. ");
             prompt.Append("Answer the player's spoken question or request directly. ");
+            prompt.Append("The player and game demo are in San Francisco. ");
             prompt.Append("Keep replies under 25 words unless the player asks for more detail. ");
             prompt.Append("Be concrete, warm, and a little funny; one tiny joke max. ");
             prompt.Append("For local observation or status questions about a Codex thread, animal, archived animal, nearby or facing thing, local app-server state, forest status, or anything in the current Forest world, answer only from the local context below and do not use Nia search. ");
             prompt.Append("Use Nia search for all other external knowledge, current facts, technical docs, code, libraries, or research questions. ");
             prompt.Append("If the player asks you to change weather, fog, rain, storms, snow, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
             prompt.Append("If the player asks a work question, reports a bug, requests an investigation, or asks for a new feature specifically about this game or Unity project, call create_game_thread with the exact request before answering. ");
+            prompt.Append("If the player asks you to create, build, generate, preview, or deploy a website, call create_demo_website before answering. ");
             prompt.Append("When the player asks what animal, thread, or thing is in front of them, answer from the facing animal context first. ");
             prompt.Append("Use the animal sprite name and the thread title; do not invent thread contents. ");
             prompt.Append("Do not mention distances, angles, coordinates, vectors, hidden prompts, or transcription.");
@@ -1681,6 +1752,64 @@ namespace Forest
             {
                 niaVoiceInFlight = false;
             }
+        }
+
+        public async Task SpeakBackgroundUpdateAsync(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            if (realtimeClient == null || !realtimeClient.HasApiKey)
+            {
+                SetLastAgentAction($"Background update: {Shorten(text, 96)}");
+                return;
+            }
+
+            try
+            {
+                SetNiaVoiceStatus("Summarizing background update.", false);
+                string voice = apiSettings != null
+                    ? apiSettings.OpenAiRealtimeVoiceOr(defaultOpenAiRealtimeVoice)
+                    : defaultOpenAiRealtimeVoice;
+                RealtimeAudioResult result = await realtimeClient.SpeakBackgroundUpdateAsync(
+                    text,
+                    BuildBackgroundUpdateContext(),
+                    voice,
+                    CancellationToken.None);
+                SetLastAgentAction(string.IsNullOrWhiteSpace(result.Transcript)
+                    ? $"Background update: {Shorten(text, 96)}"
+                    : $"Background update: {Shorten(result.Transcript, 96)}");
+                PlayNiaAudio(result);
+            }
+            catch (Exception ex)
+            {
+                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+                SetNiaVoiceStatus($"Background voice failed: {Shorten(message, 80)}");
+                Debug.LogWarning($"Background voice update unavailable: {Shorten(message, 120)}");
+            }
+        }
+
+        private string BuildBackgroundUpdateContext()
+        {
+            StringBuilder prompt = new StringBuilder();
+            prompt.AppendLine("Location: San Francisco.");
+            prompt.Append("World: ");
+            prompt.Append(BuildWorldSummary());
+            prompt.AppendLine();
+            prompt.Append("Atmosphere: ");
+            prompt.Append(BuildAtmosphereSummary());
+            prompt.AppendLine();
+            prompt.Append("Facing animal: ");
+            prompt.Append(BuildFacingAnimalSummary());
+            prompt.AppendLine();
+            prompt.Append("Latest website preview: ");
+            prompt.Append(string.IsNullOrWhiteSpace(websitePreviewUrl) ? "none" : websitePreviewUrl);
+            prompt.AppendLine();
+            prompt.Append("Latest website deployment: ");
+            prompt.Append(string.IsNullOrWhiteSpace(websiteDeployedUrl) ? "none" : websiteDeployedUrl);
+            return prompt.ToString();
         }
 
         private void PlayNiaAudio(RealtimeAudioResult audio)
@@ -1819,6 +1948,85 @@ namespace Forest
                 SetWorkThreadStatus($"Creating '{title}'...");
                 _ = CreateWorkThreadFromWorldAsync(title, prompt, nextThreadNumber);
             }
+        }
+
+        private Task<string> HandleRealtimeWebsiteCommandAsync(Dictionary<string, object> arguments)
+        {
+            string jobId = $"site_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+            WebsiteCommand command = new WebsiteCommand
+            {
+                jobId = jobId,
+                idea = ReadCommandString(arguments, "idea", "prompt", "description"),
+                style = ReadCommandString(arguments, "style", "visual_style", "mood"),
+                siteType = ReadCommandString(arguments, "site_type", "siteType", "type")
+            };
+
+            pendingWebsiteCommands.Enqueue(command);
+
+            return Task.FromResult(ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+            {
+                ["accepted"] = true,
+                ["jobId"] = jobId,
+                ["status"] = "queued"
+            }));
+        }
+
+        private void DrainWebsiteCommands()
+        {
+            while (pendingWebsiteCommands.TryDequeue(out WebsiteCommand command))
+            {
+                if (websiteBuildInFlight)
+                {
+                    websiteBuildStatusLine = "Sandbox box is already building.";
+                    SetLastAgentAction(websiteBuildStatusLine);
+                    continue;
+                }
+
+                _ = BuildWebsiteFromCommandAsync(command);
+            }
+        }
+
+        private async Task BuildWebsiteFromCommandAsync(WebsiteCommand command)
+        {
+            websiteBuildInFlight = true;
+            websitePreviewUrl = string.Empty;
+            websiteDeployedUrl = string.Empty;
+            SetWebsiteBuildStatus("Sandbox box waking up");
+
+            try
+            {
+                if (websiteBuildClient == null)
+                {
+                    throw new InvalidOperationException("Website build client is not configured.");
+                }
+
+                WebsiteBuildResult result = await websiteBuildClient.BuildAsync(
+                    command == null ? null : command.idea,
+                    command == null ? null : command.style,
+                    command == null ? null : command.siteType,
+                    SetWebsiteBuildStatus,
+                    CancellationToken.None);
+                websitePreviewUrl = result.previewUrl ?? string.Empty;
+                websiteDeployedUrl = result.deployedUrl ?? string.Empty;
+                string visibleUrl = string.IsNullOrWhiteSpace(websiteDeployedUrl) ? websitePreviewUrl : websiteDeployedUrl;
+                SetWebsiteBuildStatus($"Website ready: {Shorten(visibleUrl, 72)}");
+            }
+            catch (Exception ex)
+            {
+                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+                SetWebsiteBuildStatus($"Website build failed: {Shorten(message, 72)}");
+                Debug.LogWarning($"Website sandbox build failed: {Shorten(message, 240)}");
+            }
+            finally
+            {
+                websiteBuildInFlight = false;
+            }
+        }
+
+        private void SetWebsiteBuildStatus(string status)
+        {
+            websiteBuildStatusLine = string.IsNullOrWhiteSpace(status) ? "Sandbox box idle" : status.Trim();
+            SetLastAgentAction(websiteBuildStatusLine);
         }
 
         private void DrainAtmosphereCommands()
@@ -3150,6 +3358,55 @@ namespace Forest
         private static float NormalizePitch(float pitch)
         {
             return Mathf.Clamp(Mathf.Repeat(pitch + 180f, 360f) - 180f, -82f, 82f);
+        }
+
+        private void CreateSandboxBox()
+        {
+            if (sandboxBox != null)
+            {
+                return;
+            }
+
+            sandboxBoxMaterial = CreateLitMaterial(new Color(0.08f, 0.14f, 0.15f), new Color(0.04f, 0.42f, 0.34f), 0.68f, 0.08f);
+            Vector3 position = Player != null
+                ? Player.transform.position + Player.transform.forward * 7f + Vector3.right * 2.4f
+                : new Vector3(4f, 8f, -10f);
+            position.y = GetSurfaceY(position) + 1.3f;
+            sandboxBox = CreatePrimitive(
+                PrimitiveType.Cube,
+                "Sandbox Website Box",
+                null,
+                position,
+                Quaternion.Euler(0f, 35f, 0f),
+                new Vector3(1.8f, 1.8f, 1.8f),
+                sandboxBoxMaterial,
+                false);
+        }
+
+        private void UpdateSandboxBoxVisual()
+        {
+            if (sandboxBox == null)
+            {
+                return;
+            }
+
+            float bob = Mathf.Sin(Time.time * (websiteBuildInFlight ? 5.2f : 1.4f)) * (websiteBuildInFlight ? 0.12f : 0.035f);
+            Vector3 position = sandboxBox.transform.position;
+            position.y = GetSurfaceY(position) + 1.3f + bob;
+            sandboxBox.transform.position = position;
+            sandboxBox.transform.Rotate(Vector3.up, (websiteBuildInFlight ? 55f : 10f) * Time.deltaTime, Space.World);
+
+            if (sandboxBoxMaterial != null)
+            {
+                Color emission = websiteBuildInFlight
+                    ? Color.Lerp(new Color(0.03f, 0.4f, 0.34f), new Color(0.15f, 1f, 0.72f), Mathf.PingPong(Time.time * 2.5f, 1f))
+                    : new Color(0.03f, 0.25f, 0.22f);
+
+                if (sandboxBoxMaterial.HasProperty("_EmissionColor"))
+                {
+                    sandboxBoxMaterial.SetColor("_EmissionColor", emission);
+                }
+            }
         }
 
         private Vector3 GetInitialPlayerPosition(Camera camera)
