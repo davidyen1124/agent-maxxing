@@ -5,6 +5,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using UnityEngine;
 
 namespace Underwater
 {
@@ -29,6 +30,7 @@ namespace Underwater
             this.apiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim();
             this.model = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
             this.niaClient = niaClient;
+            Log($"Client configured. model={this.model}, openAiKeySet={!string.IsNullOrWhiteSpace(this.apiKey)}, niaEnabled={CanUseNiaSearch()}");
         }
 
         public bool HasApiKey => !string.IsNullOrWhiteSpace(ReadApiKey());
@@ -44,6 +46,7 @@ namespace Underwater
         public void SetNiaClient(NiaApiClient niaClient)
         {
             this.niaClient = niaClient;
+            Log($"NIA client updated. niaEnabled={CanUseNiaSearch()}");
         }
 
         public async Task WarmUpAnswerSessionAsync(string voice, CancellationToken token)
@@ -52,10 +55,12 @@ namespace Underwater
 
             if (string.IsNullOrWhiteSpace(apiKey))
             {
+                LogWarning("Warm-up skipped because openAiApiKey is not set.");
                 return;
             }
 
             string safeVoice = string.IsNullOrWhiteSpace(voice) ? DefaultVoice : voice.Trim();
+            Log($"Warm-up requested. model={model}, voice={safeVoice}, niaEnabled={CanUseNiaSearch()}");
 
             using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
@@ -98,6 +103,7 @@ namespace Underwater
                 : instructions.Trim();
             float[] realtimeSamples = ResampleMono(monoSamples, sampleRate, RealtimeInputSampleRate);
             string base64Audio = Convert.ToBase64String(FloatToPcm16(realtimeSamples));
+            Log($"Voice question started. inputSamples={monoSamples.Length}, inputRate={sampleRate}, realtimeSamples={realtimeSamples.Length}, model={model}, voice={safeVoice}, niaEnabled={CanUseNiaSearch()}");
 
             using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(45));
@@ -134,6 +140,7 @@ namespace Underwater
                     catch (Exception ex) when (attempt == 0 && IsRecoverableRealtimeSocketException(ex))
                     {
                         lastException = ex;
+                        LogWarning($"Recoverable realtime socket issue; reconnecting once. {Shorten(ExceptionMessage(ex), 180)}");
                         await CloseAnswerSessionAsync("answer session reconnecting");
                     }
                 }
@@ -158,6 +165,7 @@ namespace Underwater
                 throw new InvalidOperationException("OpenAI Realtime returned no playable audio.");
             }
 
+            Log($"Voice question completed. outputSamples={response.Samples.Length}, outputRate={response.SampleRate}, transcriptPresent={!string.IsNullOrWhiteSpace(response.Transcript)}");
             return response;
         }
 
@@ -205,11 +213,14 @@ namespace Underwater
             socket.Options.SetRequestHeader("Authorization", $"Bearer {apiKey}");
 
             Uri uri = new Uri($"wss://api.openai.com/v1/realtime?model={Uri.EscapeDataString(model)}");
+            Log($"Transcription socket connecting. model={model}, inputSamples={monoSamples.Length}, inputRate={sampleRate}");
             await socket.ConnectAsync(uri, requestToken);
+            Log($"Transcription socket connected. state={socket.State}");
 
             await WaitForEventTypeAsync(socket, "session.created", requestToken);
             await SendJsonAsync(socket, BuildSessionUpdate(), requestToken);
             await WaitForEventTypeAsync(socket, "session.updated", requestToken);
+            Log("Transcription realtime session updated.");
 
             await SendJsonAsync(
                 socket,
@@ -239,6 +250,7 @@ namespace Underwater
             if (socket.State == WebSocketState.Open)
             {
                 await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "voice question complete", CancellationToken.None);
+                Log("Transcription socket closed normally.");
             }
 
             string cleaned = CleanTranscript(response);
@@ -275,11 +287,14 @@ namespace Underwater
             socket.Options.SetRequestHeader("Authorization", $"Bearer {apiKey}");
 
             Uri uri = new Uri($"wss://api.openai.com/v1/realtime?model={Uri.EscapeDataString(model)}");
+            Log($"Speech socket connecting. model={model}, voice={safeVoice}, textLength={text.Trim().Length}");
             await socket.ConnectAsync(uri, requestToken);
+            Log($"Speech socket connected. state={socket.State}");
 
             await WaitForEventTypeAsync(socket, "session.created", requestToken);
             await SendJsonAsync(socket, BuildSpeechSessionUpdate(safeVoice), requestToken);
             await WaitForEventTypeAsync(socket, "session.updated", requestToken);
+            Log("Speech realtime session updated.");
             await SendJsonAsync(socket, BuildSpeechResponseCreate(text.Trim()), requestToken);
 
             RealtimeAudioResult response = await ReadAudioResponseAsync(socket, null, requestToken);
@@ -287,6 +302,7 @@ namespace Underwater
             if (socket.State == WebSocketState.Open)
             {
                 await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "speech complete", CancellationToken.None);
+                Log("Speech socket closed normally.");
             }
 
             if (response.Samples == null || response.Samples.Length == 0)
@@ -327,12 +343,14 @@ namespace Underwater
         private async Task EnsureAnswerSessionAsync(string apiKey, string voice, CancellationToken token)
         {
             string currentNiaConfigurationKey = CurrentNiaConfigurationKey();
+            bool niaEnabled = CanUseNiaSearch();
 
             if (answerSocket != null
                 && answerSocket.State == WebSocketState.Open
                 && string.Equals(answerSessionVoice, voice, StringComparison.Ordinal)
                 && string.Equals(answerSessionNiaConfigurationKey, currentNiaConfigurationKey, StringComparison.Ordinal))
             {
+                Log($"Reusing realtime answer session. state={answerSocket.State}, voice={voice}, niaEnabled={niaEnabled}");
                 return;
             }
 
@@ -342,7 +360,9 @@ namespace Underwater
             answerSocket.Options.SetRequestHeader("Authorization", $"Bearer {apiKey}");
 
             Uri uri = new Uri($"wss://api.openai.com/v1/realtime?model={Uri.EscapeDataString(model)}");
+            Log($"Answer socket connecting. model={model}, voice={voice}, niaEnabled={niaEnabled}");
             await answerSocket.ConnectAsync(uri, token);
+            Log($"Answer socket connected. state={answerSocket.State}");
 
             await WaitForEventTypeAsync(answerSocket, "session.created", token);
             await SendJsonAsync(answerSocket, BuildAnswerSessionUpdate(voice), token);
@@ -350,6 +370,7 @@ namespace Underwater
 
             answerSessionVoice = voice;
             answerSessionNiaConfigurationKey = currentNiaConfigurationKey;
+            Log($"Answer realtime session updated. voice={voice}, niaToolRegistered={niaEnabled}");
         }
 
         private async Task CloseAnswerSessionAsync(string reason)
@@ -364,15 +385,18 @@ namespace Underwater
                 return;
             }
 
+            Log($"Closing realtime answer session. reason={reason}, state={socket.State}");
             try
             {
                 if (socket.State == WebSocketState.Open || socket.State == WebSocketState.CloseReceived)
                 {
                     await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, reason, CancellationToken.None);
+                    Log("Realtime answer session closed normally.");
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                LogWarning($"Realtime answer session close failed. {Shorten(ExceptionMessage(ex), 180)}");
             }
             finally
             {
@@ -633,6 +657,7 @@ namespace Underwater
 
                     if (functionCalls.Count > 0)
                     {
+                        Log($"Realtime response requested {functionCalls.Count} tool call(s). round={toolCallRounds + 1}");
                         if (toolCallRounds >= 2)
                         {
                             throw new InvalidOperationException("OpenAI Realtime requested too many consecutive tool calls.");
@@ -660,6 +685,7 @@ namespace Underwater
                     }
 
                     byte[] pcmBytes = audioBytes.ToArray();
+                    Log($"Realtime audio response done. pcmBytes={pcmBytes.Length}, transcriptLength={transcript.Length}, textLength={text.Length}, niaToolRounds={toolCallRounds}");
                     return new RealtimeAudioResult
                     {
                         Samples = Pcm16ToFloat(pcmBytes),
@@ -678,6 +704,8 @@ namespace Underwater
         {
             if (functionCall == null || !string.Equals(functionCall.Name, "nia_search", StringComparison.Ordinal))
             {
+                string toolName = functionCall == null ? "null" : functionCall.Name;
+                LogWarning($"Unsupported realtime tool call requested. name={toolName}");
                 return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = "Unsupported realtime tool call."
@@ -686,6 +714,7 @@ namespace Underwater
 
             if (!CanUseNiaSearch())
             {
+                LogWarning("Realtime requested NIA search, but niaApiKey is not configured.");
                 return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = $"Set niaApiKey in {UnderwaterUserSettings.RelativePath} to enable Nia search."
@@ -698,6 +727,7 @@ namespace Underwater
 
             if (string.IsNullOrWhiteSpace(query))
             {
+                LogWarning("Realtime requested NIA search without a query.");
                 return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = "Nia search requires a non-empty query."
@@ -706,7 +736,10 @@ namespace Underwater
 
             try
             {
+                Log($"NIA search started from realtime tool. mode={NormalizedModeForLog(mode)}, query=\"{Shorten(query.Trim(), 120)}\"");
                 NiaSearchResult result = await niaClient.QueryAsync(query, mode, token);
+                int sourceCount = result.SourceLabels == null ? 0 : result.SourceLabels.Length;
+                Log($"NIA search completed. answerLength={(result.Answer ?? string.Empty).Length}, sourceCount={sourceCount}");
                 Dictionary<string, object> output = new Dictionary<string, object>
                 {
                     ["answer"] = result.Answer ?? string.Empty,
@@ -717,6 +750,7 @@ namespace Underwater
             catch (Exception ex)
             {
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+                LogWarning($"NIA search failed. {Shorten(message, 240)}");
                 return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = Shorten(message, 400)
@@ -762,6 +796,31 @@ namespace Underwater
         private string CurrentNiaConfigurationKey()
         {
             return CanUseNiaSearch() ? niaClient.ConfigurationKey : string.Empty;
+        }
+
+        private static void Log(string message)
+        {
+            Debug.Log($"[OpenAI Realtime] {message}");
+        }
+
+        private static void LogWarning(string message)
+        {
+            Debug.LogWarning($"[OpenAI Realtime] {message}");
+        }
+
+        private static string ExceptionMessage(Exception ex)
+        {
+            if (ex == null)
+            {
+                return "Unknown error";
+            }
+
+            return string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+        }
+
+        private static string NormalizedModeForLog(string mode)
+        {
+            return string.IsNullOrWhiteSpace(mode) ? NiaApiClient.DefaultSearchMode : mode.Trim();
         }
 
         private static List<object> ToObjectList(string[] values)

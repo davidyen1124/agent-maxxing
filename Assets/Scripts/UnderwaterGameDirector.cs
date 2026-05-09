@@ -487,15 +487,18 @@ namespace Underwater
 
             if (niaVoiceCaptureRoutine != null && !string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
             {
+                LogRealtimeVoice("Start ignored because microphone capture is already recording.");
                 return;
             }
 
             if (niaVoiceInFlight)
             {
+                LogRealtimeVoice("Start ignored because a realtime voice request is already in flight.");
                 return;
             }
 
             ReloadApiSettings();
+            LogRealtimeVoice($"Start requested. openAiKeySet={realtimeClient.HasApiKey}, niaKeySet={apiSettings != null && !string.IsNullOrWhiteSpace(apiSettings.niaApiKey)}");
 
             if (!realtimeClient.HasApiKey)
             {
@@ -511,17 +514,20 @@ namespace Underwater
 
             niaVoiceStopRequested = false;
             niaVoiceCaptureRoutine = StartCoroutine(CaptureRealtimeVoiceQuestion());
+            LogRealtimeVoice("Microphone capture started.");
         }
 
         public void EndRealtimeVoiceQuestionFromPlayer()
         {
             if (niaVoiceCaptureRoutine == null || string.IsNullOrEmpty(niaVoiceDeviceName) || !Microphone.IsRecording(niaVoiceDeviceName))
             {
+                LogRealtimeVoice("Stop ignored because microphone capture is not recording.");
                 return;
             }
 
             niaVoiceStopRequested = true;
             Microphone.End(niaVoiceDeviceName);
+            LogRealtimeVoice("Microphone capture stopped by player.");
         }
 
         private void PauseRealtimeVoicePlayback()
@@ -1216,6 +1222,7 @@ namespace Underwater
             AudioClip clip = Microphone.Start(niaVoiceDeviceName, false, maxSeconds, sampleRate);
             float startedAt = Time.realtimeSinceStartup;
             int recordedSamples = 0;
+            LogRealtimeVoice($"Recording from microphone. device=\"{niaVoiceDeviceName}\", sampleRate={sampleRate}, maxSeconds={maxSeconds}");
 
             while (!niaVoiceStopRequested && Microphone.IsRecording(niaVoiceDeviceName) && Time.realtimeSinceStartup - startedAt < maxSeconds)
             {
@@ -1238,11 +1245,13 @@ namespace Underwater
 
             if (clip == null || recordedSamples <= sampleRate / 4)
             {
+                LogRealtimeVoice($"Captured audio too short. clipPresent={clip != null}, recordedSamples={recordedSamples}, sampleRate={sampleRate}");
                 niaVoiceInFlight = false;
                 yield break;
             }
 
             float[] monoSamples = ExtractMonoSamples(clip, recordedSamples);
+            LogRealtimeVoice($"Captured audio ready. recordedSamples={recordedSamples}, monoSamples={monoSamples.Length}, sampleRate={sampleRate}");
             _ = RequestRealtimeVoiceQuestionAsync(monoSamples, sampleRate);
         }
 
@@ -1317,6 +1326,7 @@ namespace Underwater
                     BuildRealtimeAnswerInstructions(),
                     voice,
                     CancellationToken.None);
+                LogRealtimeVoice($"Realtime answer received. outputSamples={result.Samples.Length}, sampleRate={result.SampleRate}, transcriptPresent={!string.IsNullOrWhiteSpace(result.Transcript)}");
                 PlayNiaAudio(result);
             }
             catch (Exception ex)
@@ -1352,6 +1362,12 @@ namespace Underwater
             niaVoiceAudioSource.Stop();
             niaVoiceAudioSource.clip = clip;
             niaVoiceAudioSource.Play();
+            LogRealtimeVoice($"Playing realtime answer audio. samples={audio.Samples.Length}, sampleRate={sampleRate}");
+        }
+
+        private static void LogRealtimeVoice(string message)
+        {
+            Debug.Log($"[Realtime Voice] {message}");
         }
 
         private async Task CreateWorkThreadFromWorldAsync(string title, string prompt, int workThreadNumber)
