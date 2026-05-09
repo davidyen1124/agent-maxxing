@@ -48,14 +48,9 @@ namespace Underwater
         private GUIStyle loadingTitleStyle;
         private GUIStyle loadingStatusStyle;
         private GUIStyle demoHudPanelStyle;
-        private GUIStyle demoHudHeaderStyle;
         private GUIStyle demoHudTextStyle;
-        private GUIStyle demoHudDimStyle;
-        private GUIStyle demoHudOkStyle;
-        private GUIStyle demoHudWarningStyle;
         private GUIStyle demoHudKeyStyle;
         private GUIStyle miniMapPanelStyle;
-        private GUIStyle miniMapLabelStyle;
         private Texture2D miniMapPlayerDotTexture;
         private Texture2D miniMapActiveAnimalDotTexture;
         private Texture2D miniMapArchivedAnimalDotTexture;
@@ -856,42 +851,20 @@ namespace Underwater
                 new Color(0.18f, 0.86f, 0.9f, 0.52f),
                 1f);
 
-            demoHudHeaderStyle = new GUIStyle(labelStyle)
-            {
-                fontSize = 11,
-                fontStyle = FontStyle.Bold,
-                clipping = TextClipping.Clip,
-                normal = { textColor = new Color(0.68f, 0.98f, 1f) }
-            };
-
             demoHudTextStyle = new GUIStyle(labelStyle)
             {
                 fontSize = 12,
-                wordWrap = true,
+                wordWrap = false,
                 clipping = TextClipping.Clip,
                 normal = { textColor = new Color(0.9f, 0.98f, 1f) }
-            };
-
-            demoHudDimStyle = new GUIStyle(demoHudTextStyle)
-            {
-                fontStyle = FontStyle.Bold,
-                normal = { textColor = new Color(0.55f, 0.72f, 0.76f) }
-            };
-
-            demoHudOkStyle = new GUIStyle(demoHudTextStyle)
-            {
-                normal = { textColor = new Color(0.52f, 1f, 0.76f) }
-            };
-
-            demoHudWarningStyle = new GUIStyle(demoHudTextStyle)
-            {
-                normal = { textColor = new Color(1f, 0.72f, 0.48f) }
             };
 
             demoHudKeyStyle = new GUIStyle(demoHudTextStyle)
             {
                 alignment = TextAnchor.MiddleCenter,
                 fontStyle = FontStyle.Bold,
+                wordWrap = false,
+                clipping = TextClipping.Clip,
                 padding = new RectOffset(4, 4, 1, 2),
                 normal = { textColor = new Color(0.02f, 0.12f, 0.14f) }
             };
@@ -905,23 +878,16 @@ namespace Underwater
 
             miniMapPanelStyle = new GUIStyle(GUI.skin.box)
             {
-                border = new RectOffset(12, 12, 12, 12),
-                padding = new RectOffset(8, 8, 8, 8)
+                border = new RectOffset(18, 18, 18, 18),
+                padding = new RectOffset(10, 10, 10, 10)
             };
             miniMapPanelStyle.normal.background = CreateRoundedRectTexture(
-                36,
-                36,
-                10f,
+                48,
+                48,
+                18f,
                 new Color(0.01f, 0.05f, 0.07f, 0.76f),
                 new Color(0.18f, 0.86f, 0.9f, 0.5f),
                 1f);
-
-            miniMapLabelStyle = new GUIStyle(demoHudHeaderStyle)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                fontSize = 10,
-                normal = { textColor = new Color(0.74f, 0.98f, 1f) }
-            };
 
             miniMapPlayerDotTexture = CreateCircleTexture(18, new Color(0.95f, 1f, 0.92f, 1f), new Color(0.12f, 0.25f, 0.23f, 1f), 2f);
             miniMapActiveAnimalDotTexture = CreateCircleTexture(14, new Color(0.2f, 0.95f, 1f, 0.96f), new Color(0.78f, 1f, 1f, 0.82f), 1f);
@@ -930,102 +896,22 @@ namespace Underwater
 
         private void DrawDemoHud()
         {
-            float width = Mathf.Min(360f, Mathf.Max(260f, Screen.width - 24f));
-            float contentWidth = width - 28f;
-            string lastAction = Shorten(lastAgentActionLine, 118);
-            GUIContent lastActionContent = new GUIContent(lastAction);
-            float lastActionHeight = Mathf.Clamp(demoHudTextStyle.CalcHeight(lastActionContent, contentWidth - 54f), 18f, 48f);
-            float height = 120f + lastActionHeight;
+            float width = Mathf.Min(360f, Mathf.Max(284f, Screen.width - 24f));
+            float height = 44f;
             Rect panelRect = new Rect(12f, 12f, width, height);
             float x = panelRect.x + 14f;
-            float y = panelRect.y + 10f;
+            float y = panelRect.y + 12f;
 
             GUI.Box(panelRect, GUIContent.none, demoHudPanelStyle);
-            GUI.Label(new Rect(x, y, contentWidth, 16f), "DEMO HUD", demoHudHeaderStyle);
-
-            y += 22f;
             DrawHudControl(x, y, "E", "Spawn agent");
-            DrawHudControl(x + 140f, y, "Hold V", "Ask reef");
-
-            y += 29f;
-            string voiceState = FormatVoiceState();
-            y = DrawHudStatusRow(x, y, contentWidth, "Bridge", FormatBridgeState(), GetHudStatusStyle(bridgeState));
-            y = DrawHudStatusRow(x, y, contentWidth, "Voice", voiceState, GetHudStatusStyle(voiceState));
-
-            y += 7f;
-            GUI.Label(new Rect(x, y, 48f, lastActionHeight), "Last", demoHudDimStyle);
-            GUI.Label(new Rect(x + 54f, y, contentWidth - 54f, lastActionHeight), lastActionContent, demoHudTextStyle);
+            DrawHudControl(x + 132f, y, "Hold V", "to Ask agent");
         }
 
         private void DrawHudControl(float x, float y, string key, string label)
         {
-            float keyWidth = key.Length > 1 ? 46f : 26f;
+            float keyWidth = key.Length > 1 ? 58f : 26f;
             GUI.Label(new Rect(x, y, keyWidth, 20f), key, demoHudKeyStyle);
-            GUI.Label(new Rect(x + keyWidth + 6f, y + 1f, 104f, 20f), label, demoHudTextStyle);
-        }
-
-        private float DrawHudStatusRow(float x, float y, float width, string label, string value, GUIStyle valueStyle)
-        {
-            GUI.Label(new Rect(x, y, 54f, 18f), label, demoHudDimStyle);
-            GUI.Label(new Rect(x + 54f, y, width - 54f, 18f), value, valueStyle);
-            return y + 18f;
-        }
-
-        private string FormatBridgeState()
-        {
-            if (aquariumBridge == null)
-            {
-                return "offline";
-            }
-
-            return string.IsNullOrWhiteSpace(bridgeState) ? "offline" : bridgeState.Trim();
-        }
-
-        private string FormatVoiceState()
-        {
-            if (niaVoiceCaptureRoutine != null && !string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
-            {
-                return "recording";
-            }
-
-            if (niaVoiceInFlight)
-            {
-                return "asking reef";
-            }
-
-            if (niaVoiceAudioSource != null && niaVoiceAudioSource.isPlaying)
-            {
-                return "speaking";
-            }
-
-            return string.IsNullOrWhiteSpace(niaVoiceStatusLine) ? "idle" : niaVoiceStatusLine;
-        }
-
-        private GUIStyle GetHudStatusStyle(string state)
-        {
-            string normalized = string.IsNullOrWhiteSpace(state) ? string.Empty : state.Trim().ToLowerInvariant();
-
-            if (normalized.Contains("ready")
-                || normalized.Contains("recording")
-                || normalized.Contains("asking")
-                || normalized.Contains("speaking")
-                || normalized.Contains("created"))
-            {
-                return demoHudOkStyle;
-            }
-
-            if (normalized.Contains("offline")
-                || normalized.Contains("warning")
-                || normalized.Contains("missing")
-                || normalized.Contains("no microphone")
-                || normalized.Contains("could not")
-                || normalized.Contains("failed")
-                || normalized.Contains("unavailable"))
-            {
-                return demoHudWarningStyle;
-            }
-
-            return demoHudTextStyle;
+            GUI.Label(new Rect(x + keyWidth + 6f, y + 1f, 112f, 20f), label, demoHudTextStyle);
         }
 
         private void DrawMiniMap()
@@ -1033,12 +919,11 @@ namespace Underwater
             const float mapRangeMeters = 90f;
             float size = Mathf.Clamp(Mathf.Min(Screen.width, Screen.height) * 0.19f, 118f, 158f);
             Rect panelRect = new Rect(Screen.width - size - 12f, 12f, size, size);
-            Rect mapRect = new Rect(panelRect.x + 10f, panelRect.y + 22f, panelRect.width - 20f, panelRect.height - 32f);
+            Rect mapRect = new Rect(panelRect.x + 10f, panelRect.y + 10f, panelRect.width - 20f, panelRect.height - 20f);
             Vector2 center = mapRect.center;
             float radius = Mathf.Min(mapRect.width, mapRect.height) * 0.5f;
 
             GUI.Box(panelRect, GUIContent.none, miniMapPanelStyle);
-            GUI.Label(new Rect(panelRect.x + 8f, panelRect.y + 5f, panelRect.width - 16f, 14f), "ANIMALS", miniMapLabelStyle);
 
             Color previousColor = GUI.color;
             GUI.color = new Color(0.1f, 0.42f, 0.48f, 0.24f);
