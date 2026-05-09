@@ -467,7 +467,7 @@ namespace Underwater
 
             if (CanUseWorldCommands())
             {
-                instructions += " When the player asks to change the world, weather, fog, rain, storm, snow, bubbles, lighting, day, dawn, sunset, or night, call set_world_atmosphere before speaking.";
+                instructions += " When the player asks to change the world, weather, fog, rain, storm, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, day, dawn, sunset, or night, call set_world_atmosphere before speaking.";
             }
 
             return instructions;
@@ -525,7 +525,7 @@ namespace Underwater
             {
                 ["type"] = "function",
                 ["name"] = "set_world_atmosphere",
-                ["description"] = "Change the visible Underwater Unity world atmosphere. Use this for player requests about weather, rain, storms, fog, snow, bubbles, lighting, time of day, dawn, day, sunset, or night.",
+                ["description"] = "Change the visible Underwater Unity world atmosphere. Use this for player requests about weather, rain, storms, fog, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, or time of day.",
                 ["parameters"] = new Dictionary<string, object>
                 {
                     ["type"] = "object",
@@ -535,18 +535,18 @@ namespace Underwater
                         {
                             ["type"] = "string",
                             ["enum"] = new List<object> { "preserve", "dawn", "day", "sunset", "night" },
-                            ["description"] = "Requested time of day. Use preserve when the player only asks for weather."
+                            ["description"] = "Requested time of day. Map morning, sunrise, daybreak, or first light to dawn; noon, midday, afternoon, sunny, or bright to day; evening, dusk, twilight, golden hour, or sundown to sunset; midnight, moonlight, moonlit, dark, or nighttime to night. Use preserve when the player only asks for weather."
                         },
                         ["weather"] = new Dictionary<string, object>
                         {
                             ["type"] = "string",
                             ["enum"] = new List<object> { "preserve", "clear", "fog", "rain", "storm", "snow", "bubbles" },
-                            ["description"] = "Requested weather. Use preserve when the player only asks for time or lighting."
+                            ["description"] = "Requested weather. Map sunny/clear sky to clear; cloudy, overcast, haze, or mist to fog; drizzle, showers, downpour, or wet weather to rain; thunder, lightning, tempest, or squall to storm; flurries, blizzard, sleet, hail, icy, or frost to snow; bubble, bubbly, underwater, or submerged to bubbles. Use preserve when the player only asks for time or lighting."
                         },
                         ["intensity"] = new Dictionary<string, object>
                         {
                             ["type"] = "number",
-                            ["description"] = "Strength from 0 to 1. Use higher values for heavy rain, thick fog, or dramatic night."
+                            ["description"] = "Strength from 0 to 1. Use lower values for drizzle or light flurries and higher values for downpour, thick fog, blizzard, thunderstorm, or dramatic night."
                         },
                         ["mood"] = new Dictionary<string, object>
                         {

@@ -151,5 +151,33 @@ namespace Underwater.Tests
 
             Assert.That(message, Is.EqualTo("Comparing renderer paths"));
         }
+
+        [Test]
+        public void AtmosphereCommandAliasesCoverCommonTimeAndWeatherPhrases()
+        {
+            MethodInfo normalizeTime = typeof(UnderwaterGameDirector).GetMethod(
+                "NormalizeTimeOfDayOption",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            MethodInfo normalizeWeather = typeof(UnderwaterGameDirector).GetMethod(
+                "NormalizeWeatherOption",
+                BindingFlags.NonPublic | BindingFlags.Static);
+
+            Assert.That(normalizeTime, Is.Not.Null);
+            Assert.That(normalizeWeather, Is.Not.Null);
+
+            Assert.That(normalizeTime.Invoke(null, new object[] { "first light", "night" }), Is.EqualTo("dawn"));
+            Assert.That(normalizeTime.Invoke(null, new object[] { "midday", "night" }), Is.EqualTo("day"));
+            Assert.That(normalizeTime.Invoke(null, new object[] { "golden-hour", "night" }), Is.EqualTo("sunset"));
+            Assert.That(normalizeTime.Invoke(null, new object[] { "moonlit", "day" }), Is.EqualTo("night"));
+            Assert.That(normalizeTime.Invoke(null, new object[] { "preserve", "sunset" }), Is.EqualTo("sunset"));
+
+            Assert.That(normalizeWeather.Invoke(null, new object[] { "clear sky", "storm" }), Is.EqualTo("clear"));
+            Assert.That(normalizeWeather.Invoke(null, new object[] { "overcast", "clear" }), Is.EqualTo("fog"));
+            Assert.That(normalizeWeather.Invoke(null, new object[] { "drizzle", "clear" }), Is.EqualTo("rain"));
+            Assert.That(normalizeWeather.Invoke(null, new object[] { "lightning", "clear" }), Is.EqualTo("storm"));
+            Assert.That(normalizeWeather.Invoke(null, new object[] { "flurries", "clear" }), Is.EqualTo("snow"));
+            Assert.That(normalizeWeather.Invoke(null, new object[] { "submerged", "clear" }), Is.EqualTo("bubbles"));
+            Assert.That(normalizeWeather.Invoke(null, new object[] { "same", "rain" }), Is.EqualTo("rain"));
+        }
     }
 }
