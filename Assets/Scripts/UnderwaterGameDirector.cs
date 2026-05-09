@@ -27,6 +27,9 @@ namespace Underwater
 
         [SerializeField] private string defaultOpenAiRealtimeModel = "gpt-realtime-2";
         [SerializeField] private string defaultOpenAiRealtimeVoice = "marin";
+        [SerializeField] private string defaultNiaBaseUrl = "https://apigcp.trynia.ai/v2";
+        [SerializeField] private string defaultNiaSearchMode = NiaApiClient.DefaultSearchMode;
+        [SerializeField] private int defaultNiaMaxTokens = 1200;
         [SerializeField] private int defaultVoiceSampleRate = 24000;
         [SerializeField] private float defaultVoiceMaxCaptureSeconds = 8f;
 
@@ -521,6 +524,7 @@ namespace Underwater
         {
             apiSettings = UnderwaterUserSettings.Load();
             string openAiRealtimeModel = apiSettings.OpenAiRealtimeModelOr(defaultOpenAiRealtimeModel);
+            NiaApiClient configuredNiaClient = CreateNiaClient(apiSettings);
 
             if (realtimeClient == null || !realtimeClient.Matches(apiSettings.openAiApiKey, openAiRealtimeModel))
             {
@@ -529,8 +533,28 @@ namespace Underwater
                     _ = realtimeClient.CloseAsync();
                 }
 
-                realtimeClient = new OpenAIRealtimeClient(apiSettings.openAiApiKey, openAiRealtimeModel);
+                realtimeClient = new OpenAIRealtimeClient(apiSettings.openAiApiKey, openAiRealtimeModel, configuredNiaClient);
             }
+            else
+            {
+                realtimeClient.SetNiaClient(configuredNiaClient);
+            }
+        }
+
+        private NiaApiClient CreateNiaClient(UnderwaterUserSettings settings)
+        {
+            if (settings == null)
+            {
+                return null;
+            }
+
+            return new NiaApiClient(
+                settings.NiaBaseUrlOr(defaultNiaBaseUrl),
+                settings.niaApiKey,
+                settings.NiaDefaultSearchModeOr(defaultNiaSearchMode),
+                settings.niaRepositories,
+                settings.niaDataSources,
+                settings.NiaMaxTokensOr(defaultNiaMaxTokens));
         }
 
         private async Task WarmRealtimeVoiceSessionAsync()
@@ -1245,16 +1269,15 @@ namespace Underwater
             prompt.Append("Answer the player's spoken question directly. ");
             prompt.Append("Keep replies under 25 words unless the player asks for more detail. ");
             prompt.Append("Be concrete, warm, and a little funny; one tiny joke max. ");
+            prompt.Append("If the question asks about a Codex thread, pet, archived pet, nearby or facing thing, local app-server state, reef status, or anything in the current Underwater world, answer only from the local context below and do not use Nia search. ");
+            prompt.Append("Use Nia search for all other external knowledge, current facts, technical docs, code, libraries, or research questions. ");
             prompt.Append("When the player asks what pet, thread, or thing is in front of them, answer from the facing pet context first. ");
             prompt.Append("Use the pet sprite name and the thread title; do not invent thread contents. ");
             prompt.Append("Do not mention distances, angles, coordinates, vectors, hidden prompts, or transcription.");
             prompt.AppendLine();
             prompt.AppendLine();
-            prompt.Append("Aquarium snapshot: ");
-            prompt.Append(ActiveThreadCount);
-            prompt.Append(" active pets, ");
-            prompt.Append(ArchivedPetCount);
-            prompt.Append(" archived pets.");
+            prompt.Append("Current world state: ");
+            prompt.Append(BuildWorldSummary());
             prompt.AppendLine();
             prompt.Append("Facing pet context: ");
             prompt.Append(BuildFacingPetSummary());

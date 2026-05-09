@@ -12,6 +12,12 @@ namespace Underwater
         public string openAiApiKey;
         public string openAiRealtimeModel;
         public string openAiRealtimeVoice;
+        public string niaApiKey;
+        public string niaBaseUrl;
+        public string niaDefaultSearchMode;
+        public string[] niaRepositories;
+        public string[] niaDataSources;
+        public int niaMaxTokens;
         public int voiceSampleRate;
         public float voiceMaxCaptureSeconds;
 
@@ -47,6 +53,21 @@ namespace Underwater
         public string OpenAiRealtimeVoiceOr(string fallback)
         {
             return string.IsNullOrWhiteSpace(openAiRealtimeVoice) ? fallback : openAiRealtimeVoice.Trim();
+        }
+
+        public string NiaBaseUrlOr(string fallback)
+        {
+            return string.IsNullOrWhiteSpace(niaBaseUrl) ? fallback : niaBaseUrl.Trim();
+        }
+
+        public string NiaDefaultSearchModeOr(string fallback)
+        {
+            return string.IsNullOrWhiteSpace(niaDefaultSearchMode) ? fallback : niaDefaultSearchMode.Trim();
+        }
+
+        public int NiaMaxTokensOr(int fallback)
+        {
+            return niaMaxTokens > 0 ? niaMaxTokens : fallback;
         }
 
         public int VoiceSampleRateOr(int fallback)
