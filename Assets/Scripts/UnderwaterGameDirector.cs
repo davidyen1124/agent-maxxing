@@ -24,6 +24,8 @@ namespace Underwater
         private const float TerrainModeDetailDensity = 0.42f;
         private const float TerrainModeHeightmapPixelError = 9f;
         private const float TerrainModeBasemapDistance = 180f;
+        private const float TerrainThreadInitialMinRadius = 28f;
+        private const float TerrainThreadInitialMaxRadius = 86f;
 
         [SerializeField] private string defaultOpenAiRealtimeModel = "gpt-realtime-2";
         [SerializeField] private string defaultOpenAiRealtimeVoice = "marin";
@@ -649,7 +651,7 @@ namespace Underwater
         public Vector3 GetRandomMidWaterPoint(float margin = 8f)
         {
             Vector3 point = usingSceneTerrain
-                ? GetRandomTerrainPointNearPlayer(margin, 12f, 42f)
+                ? GetRandomTerrainPointNearPlayer(margin, TerrainThreadInitialMinRadius, TerrainThreadInitialMaxRadius)
                 : GetRandomPoint(margin);
 
             if (usingSceneTerrain)
