@@ -53,6 +53,7 @@ namespace Underwater
         private Texture2D miniMapPlayerDotTexture;
         private Texture2D miniMapActiveAnimalDotTexture;
         private Texture2D miniMapArchivedAnimalDotTexture;
+        private bool threadHudVisible = true;
 
         private Material reefMaterial;
         private Material kelpMaterial;
@@ -204,7 +205,11 @@ namespace Underwater
             }
 
             EnsureGuiStyles();
-            DrawMiniMap();
+
+            if (threadHudVisible)
+            {
+                DrawMiniMap();
+            }
 
             if (worldSyncLoading)
             {
@@ -212,7 +217,15 @@ namespace Underwater
                 return;
             }
 
-            DrawThreadNameTags();
+            if (threadHudVisible)
+            {
+                DrawThreadNameTags();
+            }
+        }
+
+        public void ToggleThreadHudVisibility()
+        {
+            threadHudVisible = !threadHudVisible;
         }
 
         public void SyncThreadWorld(IReadOnlyList<AquariumThreadSnapshot> threads, IReadOnlyList<AquariumArchivedPetSnapshot> syncedArchivedPets, string detail)
@@ -787,23 +800,23 @@ namespace Underwater
             threadTagStyle = new GUIStyle(labelStyle)
             {
                 alignment = TextAnchor.MiddleCenter,
-                fontSize = 18,
+                fontSize = 14,
                 fontStyle = FontStyle.Bold,
                 clipping = TextClipping.Clip,
                 wordWrap = true,
-                padding = new RectOffset(14, 14, 8, 8),
+                padding = new RectOffset(10, 10, 6, 6),
                 normal = { textColor = new Color(0.82f, 0.98f, 1f) }
             };
 
             speechBubbleStyle = new GUIStyle(GUI.skin.box)
             {
-                padding = new RectOffset(16, 16, 9, 9),
-                border = new RectOffset(14, 14, 14, 14)
+                padding = new RectOffset(12, 12, 7, 7),
+                border = new RectOffset(12, 12, 12, 12)
             };
             speechBubbleStyle.normal.background = CreateRoundedRectTexture(
-                40,
-                40,
-                14f,
+                36,
+                36,
+                12f,
                 new Color(0.02f, 0.14f, 0.18f, 0.86f),
                 new Color(0.27f, 0.84f, 0.9f, 0.78f),
                 2f);
@@ -1027,7 +1040,7 @@ namespace Underwater
                     continue;
                 }
 
-                string message = Shorten(thread.BubbleMessage, 64);
+                string message = Shorten(thread.BubbleMessage, 48);
                 DrawNameTag(camera, message, thread.BubbleAnchorWorldPosition);
             }
 
@@ -1040,7 +1053,7 @@ namespace Underwater
                     continue;
                 }
 
-                string message = Shorten(archivedPet.StatusMessage, 64);
+                string message = Shorten(archivedPet.StatusMessage, 48);
                 DrawNameTag(camera, message, archivedPet.transform.position + Vector3.up * 1.05f);
             }
         }
@@ -1065,11 +1078,11 @@ namespace Underwater
             }
 
             GUIContent content = new GUIContent(message);
-            float width = Mathf.Clamp(threadTagStyle.CalcSize(content).x + 32f, 150f, 300f);
-            float textHeight = threadTagStyle.CalcHeight(content, width - 28f);
-            float height = Mathf.Clamp(textHeight + 18f, 42f, 92f);
+            float width = Mathf.Clamp(threadTagStyle.CalcSize(content).x + 24f, 118f, 230f);
+            float textHeight = threadTagStyle.CalcHeight(content, width - 22f);
+            float height = Mathf.Clamp(textHeight + 14f, 32f, 68f);
             float x = screenPoint.x - (width * 0.5f);
-            float y = Screen.height - screenPoint.y - height - 18f;
+            float y = Screen.height - screenPoint.y - height - 12f;
             Rect tagRect = new Rect(x, y, width, height);
             Rect shadowRect = new Rect(tagRect.x + 2f, tagRect.y + 3f, tagRect.width, tagRect.height);
 

@@ -213,12 +213,19 @@ namespace Underwater
             bool spawnPressed = false;
             bool voicePressed = false;
             bool voiceReleased = false;
+            bool toggleHudPressed = false;
 
             if (Keyboard.current != null)
             {
                 spawnPressed = Keyboard.current.eKey.wasPressedThisFrame;
                 voicePressed = Keyboard.current.vKey.wasPressedThisFrame;
                 voiceReleased = Keyboard.current.vKey.wasReleasedThisFrame;
+                toggleHudPressed = Keyboard.current.hKey.wasPressedThisFrame;
+            }
+
+            if (toggleHudPressed)
+            {
+                director.ToggleThreadHudVisibility();
             }
 
             if (spawnPressed)
