@@ -11,9 +11,9 @@ namespace Underwater.Tests
     public sealed class UnderwaterBootstrapPlayModeTests
     {
         [UnityTest]
-        public IEnumerator SampleSceneBootstrapsUnderwaterSlice()
+        public IEnumerator TerrainDemoSceneBootstrapsUnderwaterSlice()
         {
-            SceneManager.LoadScene("SampleScene");
+            SceneManager.LoadScene("TerrainDemoScene");
             yield return null;
             yield return null;
 
@@ -22,7 +22,7 @@ namespace Underwater.Tests
             Assert.That(director, Is.Not.Null, "Runtime bootstrap should create the underwater director.");
             Assert.That(director.Player, Is.Not.Null, "Runtime bootstrap should create the player rig.");
             Assert.That(director.GetComponent<AquariumDirectorBridge>(), Is.Not.Null, "Runtime bootstrap should attach the Codex aquarium bridge.");
-            Assert.That(GameObject.Find("Runtime Arena"), Is.Not.Null, "Expected the procedural arena root to be present.");
+            Assert.That(Object.FindAnyObjectByType<Terrain>(), Is.Not.Null, "Expected the forest terrain scene to be present.");
             Assert.That(Camera.main, Is.Not.Null, "Expected a main camera for first-person swimming.");
             Assert.That(director.Player.BoostNormalized, Is.GreaterThan(0.99f), "Player should start with full swim boost.");
             Assert.That(director.ActiveThreadCount, Is.GreaterThanOrEqualTo(0), "Thread count should be readable on boot.");
