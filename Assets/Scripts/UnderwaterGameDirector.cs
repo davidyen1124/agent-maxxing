@@ -12,6 +12,9 @@ namespace Underwater
 {
     public sealed class UnderwaterGameDirector : MonoBehaviour
     {
+        private const string ReefTaskTitlePrefix = "Underwater reef task ";
+        private const string ReefTaskCounterPrefsKey = "Underwater.ReefTask.NextThreadNumber";
+
         private readonly Dictionary<string, ThreadPetAI> activeThreads = new Dictionary<string, ThreadPetAI>();
         private readonly Dictionary<string, ArchivedThreadPet> archivedPets = new Dictionary<string, ArchivedThreadPet>();
 
@@ -300,6 +303,7 @@ namespace Underwater
             directorStatusLine = string.IsNullOrWhiteSpace(sync.detail)
                 ? $"Synced {ActiveThreadCount} swimming threads and {ArchivedPetCount} archived pets."
                 : sync.detail;
+            PersistNextWorkThreadNumber(FindHighestExistingReefTaskNumber() + 1);
             UpdateNearestThreadStatus();
             SetWorldSyncProgress(totalWork, Mathf.Max(1, totalWork), "Thread pets ready");
             worldSyncLoading = false;
@@ -414,13 +418,13 @@ namespace Underwater
                 return;
             }
 
-            int nextThreadNumber = spawnedWorkThreadCount + 1;
-            string title = $"Underwater reef task {nextThreadNumber}";
+            int nextThreadNumber = GetNextPersistentWorkThreadNumber();
+            string title = CreateReefTaskTitle(nextThreadNumber);
             string prompt = BuildWorkThreadPrompt(title);
 
             workThreadSpawnInFlight = true;
             SetWorkThreadStatus($"Creating '{title}'...");
-            _ = CreateWorkThreadFromWorldAsync(title, prompt);
+            _ = CreateWorkThreadFromWorldAsync(title, prompt, nextThreadNumber);
         }
 
         public AquariumDirectorSnapshot CreateSnapshot()
@@ -839,12 +843,13 @@ namespace Underwater
             return prompt.ToString();
         }
 
-        private async Task CreateWorkThreadFromWorldAsync(string title, string prompt)
+        private async Task CreateWorkThreadFromWorldAsync(string title, string prompt, int workThreadNumber)
         {
             try
             {
                 string threadId = await aquariumBridge.CreateWorkThreadAsync(title, prompt);
                 spawnedWorkThreadCount++;
+                PersistNextWorkThreadNumber(workThreadNumber + 1);
                 workThreadSpawnInFlight = false;
                 SetWorkThreadStatus($"Created '{title}' ({Shorten(threadId, 8)}).");
                 directorStatusLine = "Spawned a Codex work thread from the reef.";
@@ -861,6 +866,76 @@ namespace Underwater
         private void SetWorkThreadStatus(string status)
         {
             workThreadStatusLine = string.IsNullOrWhiteSpace(status) ? string.Empty : status.Trim();
+        }
+
+        private int GetNextPersistentWorkThreadNumber()
+        {
+            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(ReefTaskCounterPrefsKey, 1));
+            int worldNextNumber = FindHighestExistingReefTaskNumber() + 1;
+            int sessionNextNumber = spawnedWorkThreadCount + 1;
+            return Mathf.Max(savedNextNumber, worldNextNumber, sessionNextNumber);
+        }
+
+        private void PersistNextWorkThreadNumber(int nextNumber)
+        {
+            int normalizedNextNumber = Mathf.Max(1, nextNumber);
+            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(ReefTaskCounterPrefsKey, 1));
+
+            if (normalizedNextNumber <= savedNextNumber)
+            {
+                return;
+            }
+
+            PlayerPrefs.SetInt(ReefTaskCounterPrefsKey, normalizedNextNumber);
+            PlayerPrefs.Save();
+        }
+
+        private int FindHighestExistingReefTaskNumber()
+        {
+            int highestNumber = 0;
+
+            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            {
+                if (pair.Value != null && TryReadReefTaskNumber(pair.Value.Title, out int threadNumber))
+                {
+                    highestNumber = Mathf.Max(highestNumber, threadNumber);
+                }
+            }
+
+            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
+            {
+                if (pair.Value != null && TryReadReefTaskNumber(pair.Value.Title, out int archivedNumber))
+                {
+                    highestNumber = Mathf.Max(highestNumber, archivedNumber);
+                }
+            }
+
+            return highestNumber;
+        }
+
+        private static string CreateReefTaskTitle(int number)
+        {
+            return $"{ReefTaskTitlePrefix}{Mathf.Max(1, number)}";
+        }
+
+        private static bool TryReadReefTaskNumber(string title, out int number)
+        {
+            number = 0;
+
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                return false;
+            }
+
+            string trimmedTitle = title.Trim();
+
+            if (!trimmedTitle.StartsWith(ReefTaskTitlePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            string suffix = trimmedTitle.Substring(ReefTaskTitlePrefix.Length).Trim();
+            return int.TryParse(suffix, out number) && number > 0;
         }
 
         private static string FormatVector(Vector3 vector)
