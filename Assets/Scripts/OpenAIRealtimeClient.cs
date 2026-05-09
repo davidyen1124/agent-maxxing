@@ -19,18 +19,24 @@ namespace Underwater
 
         private readonly string apiKey;
         private readonly string model;
+        private readonly Func<Dictionary<string, object>, string> worldCommandHandler;
         private readonly SemaphoreSlim socketLock = new SemaphoreSlim(1, 1);
         private NiaApiClient niaClient;
         private ClientWebSocket answerSocket;
         private string answerSessionVoice;
         private string answerSessionNiaConfigurationKey;
 
-        public OpenAIRealtimeClient(string apiKey, string model, NiaApiClient niaClient)
+        public OpenAIRealtimeClient(
+            string apiKey,
+            string model,
+            NiaApiClient niaClient,
+            Func<Dictionary<string, object>, string> worldCommandHandler)
         {
             this.apiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim();
             this.model = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
             this.niaClient = niaClient;
-            Log($"Client configured. model={this.model}, openAiKeySet={!string.IsNullOrWhiteSpace(this.apiKey)}, niaEnabled={CanUseNiaSearch()}");
+            this.worldCommandHandler = worldCommandHandler;
+            Log($"Client configured. model={this.model}, openAiKeySet={!string.IsNullOrWhiteSpace(this.apiKey)}, niaEnabled={CanUseNiaSearch()}, worldCommandsEnabled={CanUseWorldCommands()}");
         }
 
         public bool HasApiKey => !string.IsNullOrWhiteSpace(ReadApiKey());
@@ -435,9 +441,11 @@ namespace Underwater
                 ["instructions"] = BuildAnswerSessionInstructions()
             };
 
-            if (CanUseNiaSearch())
+            List<object> tools = BuildRealtimeTools();
+
+            if (tools.Count > 0)
             {
-                session["tools"] = BuildNiaSearchTools();
+                session["tools"] = tools;
                 session["tool_choice"] = "auto";
             }
 
@@ -457,36 +465,94 @@ namespace Underwater
                 instructions += " Route questions about Codex threads, pets, archived pets, nearby/facing things, reef state, local app-server state, or the current Underwater world to the provided game context only. Never call nia_search for those local thread or pet questions. For all other external knowledge, current information, technical docs, code, libraries, research, or anything that benefits from search, call nia_search before answering.";
             }
 
+            if (CanUseWorldCommands())
+            {
+                instructions += " When the player asks to change the world, weather, fog, rain, storm, snow, bubbles, lighting, day, dawn, sunset, or night, call set_world_atmosphere before speaking.";
+            }
+
             return instructions;
         }
 
-        private static List<object> BuildNiaSearchTools()
+        private List<object> BuildRealtimeTools()
         {
-            return new List<object>
+            List<object> tools = new List<object>();
+
+            if (CanUseNiaSearch())
             {
-                new Dictionary<string, object>
+                tools.Add(BuildNiaSearchTool());
+            }
+
+            if (CanUseWorldCommands())
+            {
+                tools.Add(BuildWorldAtmosphereTool());
+            }
+
+            return tools;
+        }
+
+        private static Dictionary<string, object> BuildNiaSearchTool()
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = "function",
+                ["name"] = "nia_search",
+                ["description"] = "Search Nia for external knowledge only. Do not use for local Underwater/Codex app-server questions about threads, pets, archived pets, nearby/facing objects, reef state, or current game context. Use universal for Nia's pre-indexed repositories, docs, and papers; web for current web information; query for configured Nia workspace sources; deep for multi-step research.",
+                ["parameters"] = new Dictionary<string, object>
                 {
-                    ["type"] = "function",
-                    ["name"] = "nia_search",
-                    ["description"] = "Search Nia for external knowledge only. Do not use for local Underwater/Codex app-server questions about threads, pets, archived pets, nearby/facing objects, reef state, or current game context. Use universal for Nia's pre-indexed repositories, docs, and papers; web for current web information; query for configured Nia workspace sources; deep for multi-step research.",
-                    ["parameters"] = new Dictionary<string, object>
+                    ["type"] = "object",
+                    ["properties"] = new Dictionary<string, object>
                     {
-                        ["type"] = "object",
-                        ["properties"] = new Dictionary<string, object>
+                        ["query"] = new Dictionary<string, object>
                         {
-                            ["query"] = new Dictionary<string, object>
-                            {
-                                ["type"] = "string",
-                                ["description"] = "A concise natural-language search query."
-                            },
-                            ["mode"] = new Dictionary<string, object>
-                            {
-                                ["type"] = "string",
-                                ["enum"] = new List<object> { "universal", "web", "query", "deep" },
-                                ["description"] = "Search mode. Prefer universal unless the user specifically needs live web/current information, configured workspace sources, or deep research."
-                            }
+                            ["type"] = "string",
+                            ["description"] = "A concise natural-language search query."
                         },
-                        ["required"] = new List<object> { "query" }
+                        ["mode"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "string",
+                            ["enum"] = new List<object> { "universal", "web", "query", "deep" },
+                            ["description"] = "Search mode. Prefer universal unless the user specifically needs live web/current information, configured workspace sources, or deep research."
+                        }
+                    },
+                    ["required"] = new List<object> { "query" }
+                }
+            };
+        }
+
+        private static Dictionary<string, object> BuildWorldAtmosphereTool()
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = "function",
+                ["name"] = "set_world_atmosphere",
+                ["description"] = "Change the visible Underwater Unity world atmosphere. Use this for player requests about weather, rain, storms, fog, snow, bubbles, lighting, time of day, dawn, day, sunset, or night.",
+                ["parameters"] = new Dictionary<string, object>
+                {
+                    ["type"] = "object",
+                    ["properties"] = new Dictionary<string, object>
+                    {
+                        ["time_of_day"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "string",
+                            ["enum"] = new List<object> { "preserve", "dawn", "day", "sunset", "night" },
+                            ["description"] = "Requested time of day. Use preserve when the player only asks for weather."
+                        },
+                        ["weather"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "string",
+                            ["enum"] = new List<object> { "preserve", "clear", "fog", "rain", "storm", "snow", "bubbles" },
+                            ["description"] = "Requested weather. Use preserve when the player only asks for time or lighting."
+                        },
+                        ["intensity"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "number",
+                            ["description"] = "Strength from 0 to 1. Use higher values for heavy rain, thick fog, or dramatic night."
+                        },
+                        ["mood"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "string",
+                            ["description"] = "Optional short atmosphere description, such as calm, spooky, cinematic, cozy, or dramatic."
+                        }
                     }
                 }
             };
@@ -702,7 +768,20 @@ namespace Underwater
 
         private async Task<string> ExecuteFunctionCallAsync(RealtimeFunctionCall functionCall, CancellationToken token)
         {
-            if (functionCall == null || !string.Equals(functionCall.Name, "nia_search", StringComparison.Ordinal))
+            if (functionCall == null)
+            {
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = "Unsupported realtime tool call."
+                });
+            }
+
+            if (string.Equals(functionCall.Name, "set_world_atmosphere", StringComparison.Ordinal))
+            {
+                return ExecuteWorldAtmosphereCommand(functionCall);
+            }
+
+            if (!string.Equals(functionCall.Name, "nia_search", StringComparison.Ordinal))
             {
                 string toolName = functionCall == null ? "null" : functionCall.Name;
                 LogWarning($"Unsupported realtime tool call requested. name={toolName}");
@@ -758,6 +837,34 @@ namespace Underwater
             }
         }
 
+        private string ExecuteWorldAtmosphereCommand(RealtimeFunctionCall functionCall)
+        {
+            if (!CanUseWorldCommands())
+            {
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = "The Unity world command bridge is unavailable."
+                });
+            }
+
+            Dictionary<string, object> arguments = AquariumDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>
+                ?? new Dictionary<string, object>();
+
+            try
+            {
+                string output = worldCommandHandler(arguments);
+                return string.IsNullOrWhiteSpace(output) ? "{}" : output;
+            }
+            catch (Exception ex)
+            {
+                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = Shorten(message, 400)
+                });
+            }
+        }
+
         private static Dictionary<string, object> BuildFunctionCallOutput(string callId, string output)
         {
             return new Dictionary<string, object>
@@ -791,6 +898,11 @@ namespace Underwater
         private bool CanUseNiaSearch()
         {
             return niaClient != null && niaClient.HasApiKey;
+        }
+
+        private bool CanUseWorldCommands()
+        {
+            return worldCommandHandler != null;
         }
 
         private string CurrentNiaConfigurationKey()
