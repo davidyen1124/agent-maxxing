@@ -1,8 +1,0 @@
-{
-  "id": "apupepe",
-  "displayName": "Pepe",
-  "description": "A compact Codex-style green frog pet in a plain blue shirt.",
-  "kind": "creature",
-  "source": "codex-pets.net popular",
-  "spritesheetPath": "spritesheet.webp"
-}

@@ -1,8 +1,0 @@
-{
-  "id": "teemo",
-  "displayName": "Teemo",
-  "description": "Captain Teemo on duty.",
-  "kind": "creature",
-  "source": "codex-pets.net popular",
-  "spritesheetPath": "spritesheet.webp"
-}

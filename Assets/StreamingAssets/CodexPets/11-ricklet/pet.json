@@ -1,8 +1,0 @@
-{
-  "id": "ricklet",
-  "displayName": "Ricklet",
-  "description": "A tiny chaotic scientist companion inspired by Rick Sanchez.",
-  "kind": "person",
-  "source": "codex-pets.net popular",
-  "spritesheetPath": "spritesheet.webp"
-}

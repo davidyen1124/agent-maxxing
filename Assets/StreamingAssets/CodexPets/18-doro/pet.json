@@ -1,8 +1,0 @@
-{
-  "id": "doro",
-  "displayName": "Doro",
-  "description": "A tiny white chibi pet with pink hair, purple eyes, and a side rose ribbon.",
-  "kind": "creature",
-  "source": "codex-pets.net popular",
-  "spritesheetPath": "spritesheet.webp"
-}

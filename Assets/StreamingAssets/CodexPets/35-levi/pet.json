@@ -1,8 +1,0 @@
-{
-  "id": "levi",
-  "displayName": "Levi",
-  "description": "A tiny airborne sword fighter who jumps, spins, and swings twin blades.",
-  "kind": "person",
-  "source": "codex-pets.net popular",
-  "spritesheetPath": "spritesheet.webp"
-}

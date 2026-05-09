@@ -1,0 +1,206 @@
+using UnityEngine;
+
+namespace Underwater
+{
+    public sealed class ThreadPetAnimalVisual : MonoBehaviour
+    {
+        private const string AnimatorMoveParameter = "Vert";
+        private const string AnimatorRunParameter = "State";
+        private const float AnimatorDampTime = 0.08f;
+
+        private static readonly string[] AnimalPrefabNames =
+        {
+            "Dog_001",
+            "Kitty_001",
+            "Chicken_001",
+            "Deer_001",
+            "Pinguin_001",
+            "Tiger_001",
+            "Horse_001"
+        };
+
+        private static readonly string[] AnimalDisplayNames =
+        {
+            "Dog",
+            "Kitty",
+            "Chicken",
+            "Deer",
+            "Pinguin",
+            "Tiger",
+            "Horse"
+        };
+
+        private Animator animator;
+        private Transform modelRoot;
+        private Vector3 modelBaseLocalPosition;
+        private float targetHeight = 1.2f;
+        private float currentMove;
+        private float currentRun;
+        private float bobSeed;
+        private string petId = "unknown-pet";
+        private string petDisplayName = "Unknown animal";
+
+        public string PetId => petId;
+
+        public string PetDisplayName => petDisplayName;
+
+        public static ThreadPetAnimalVisual Create(Transform parent, string seed, float targetHeight)
+        {
+            int index = GetStableIndex(seed, AnimalPrefabNames.Length);
+            GameObject prefab = LoadAnimalPrefab(index);
+
+            if (prefab == null)
+            {
+                Debug.LogWarning("[ThreadPetAnimalVisual] No animal prefab could be loaded for thread pet.");
+                return null;
+            }
+
+            ThreadPetAnimalVisual visual = parent.gameObject.AddComponent<ThreadPetAnimalVisual>();
+            visual.Initialize(prefab, index, targetHeight);
+            return visual;
+        }
+
+        public void SetState(CodexPetAnimationState state, Vector3 velocity, bool forceRun)
+        {
+            if (animator == null)
+            {
+                return;
+            }
+
+            float horizontalSpeed = new Vector2(velocity.x, velocity.z).magnitude;
+            float move = Mathf.InverseLerp(0.05f, 2.2f, horizontalSpeed);
+            float run = forceRun || horizontalSpeed > 3.2f || IsRunningState(state) ? 1f : 0f;
+
+            currentMove = Mathf.MoveTowards(currentMove, move, Time.deltaTime * 5f);
+            currentRun = Mathf.MoveTowards(currentRun, run, Time.deltaTime * 6f);
+            animator.SetFloat(AnimatorMoveParameter, currentMove, AnimatorDampTime, Time.deltaTime);
+            animator.SetFloat(AnimatorRunParameter, currentRun, AnimatorDampTime, Time.deltaTime);
+
+            if (modelRoot != null)
+            {
+                float jumpBob = state == CodexPetAnimationState.Jumping ? Mathf.Abs(Mathf.Sin(Time.time * 9f + bobSeed)) * 0.08f : 0f;
+                float idleBob = currentMove < 0.05f ? Mathf.Sin(Time.time * 2.1f + bobSeed) * 0.015f : 0f;
+                modelRoot.localPosition = modelBaseLocalPosition + (Vector3.up * (jumpBob + idleBob));
+            }
+        }
+
+        private void Initialize(GameObject prefab, int animalIndex, float requestedHeight)
+        {
+            targetHeight = Mathf.Max(0.2f, requestedHeight);
+            bobSeed = Random.Range(0f, 100f);
+            petId = animalIndex >= 0 && animalIndex < AnimalPrefabNames.Length ? AnimalPrefabNames[animalIndex] : prefab.name;
+            petDisplayName = animalIndex >= 0 && animalIndex < AnimalDisplayNames.Length ? AnimalDisplayNames[animalIndex] : prefab.name;
+
+            GameObject instance = Instantiate(prefab, transform);
+            instance.name = prefab.name;
+            instance.transform.localPosition = Vector3.zero;
+            instance.transform.localRotation = Quaternion.identity;
+            instance.transform.localScale = Vector3.one;
+            modelRoot = instance.transform;
+
+            StripImportedControlComponents(instance);
+            ScaleAndGround(instance);
+            modelBaseLocalPosition = modelRoot.localPosition;
+            animator = instance.GetComponentInChildren<Animator>();
+            SetRenderersForRuntime(instance);
+        }
+
+        private void StripImportedControlComponents(GameObject instance)
+        {
+            MonoBehaviour[] behaviours = instance.GetComponentsInChildren<MonoBehaviour>(true);
+
+            for (int i = 0; i < behaviours.Length; i++)
+            {
+                if (behaviours[i] != null)
+                {
+                    behaviours[i].enabled = false;
+                }
+            }
+
+            CharacterController[] controllers = instance.GetComponentsInChildren<CharacterController>(true);
+
+            for (int i = 0; i < controllers.Length; i++)
+            {
+                controllers[i].enabled = false;
+            }
+        }
+
+        private void ScaleAndGround(GameObject instance)
+        {
+            Bounds bounds = CalculateRendererBounds(instance);
+
+            if (bounds.size.y > 0.0001f)
+            {
+                float scale = targetHeight / bounds.size.y;
+                instance.transform.localScale *= scale;
+            }
+
+            bounds = CalculateRendererBounds(instance);
+            float bottomOffset = bounds.min.y - transform.position.y;
+            instance.transform.localPosition -= Vector3.up * bottomOffset;
+        }
+
+        private static void SetRenderersForRuntime(GameObject instance)
+        {
+            Renderer[] renderers = instance.GetComponentsInChildren<Renderer>(true);
+
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                renderers[i].shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                renderers[i].receiveShadows = false;
+            }
+        }
+
+        private static Bounds CalculateRendererBounds(GameObject instance)
+        {
+            Renderer[] renderers = instance.GetComponentsInChildren<Renderer>(true);
+
+            if (renderers.Length == 0)
+            {
+                return new Bounds(instance.transform.position, Vector3.one);
+            }
+
+            Bounds bounds = renderers[0].bounds;
+
+            for (int i = 1; i < renderers.Length; i++)
+            {
+                bounds.Encapsulate(renderers[i].bounds);
+            }
+
+            return bounds;
+        }
+
+        private static GameObject LoadAnimalPrefab(int index)
+        {
+            if (index < 0 || index >= AnimalPrefabNames.Length)
+            {
+                return null;
+            }
+
+            return Resources.Load<GameObject>($"ThreadPetAnimals/{AnimalPrefabNames[index]}");
+        }
+
+        private static int GetStableIndex(string seed, int count)
+        {
+            unchecked
+            {
+                int hash = 23;
+                string safeSeed = string.IsNullOrWhiteSpace(seed) ? "underwater" : seed;
+
+                for (int i = 0; i < safeSeed.Length; i++)
+                {
+                    hash = (hash * 31) + safeSeed[i];
+                }
+
+                return (hash & 0x7fffffff) % Mathf.Max(1, count);
+            }
+        }
+
+        private static bool IsRunningState(CodexPetAnimationState state)
+        {
+            return state == CodexPetAnimationState.Running ||
+                state == CodexPetAnimationState.RunningLeft ||
+                state == CodexPetAnimationState.RunningRight;
+        }
+    }
+}

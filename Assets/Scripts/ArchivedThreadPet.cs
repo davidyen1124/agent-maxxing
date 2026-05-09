@@ -4,7 +4,10 @@ namespace Underwater
 {
     public sealed class ArchivedThreadPet : MonoBehaviour
     {
-        private CodexPetSpriteAnimator petAnimator;
+        private const float ArchivedAnimalHeight = 1f;
+        private const float TerrainGroundOffset = 0.05f;
+
+        private ThreadPetAnimalVisual petVisual;
         private UnderwaterGameDirector director;
         private Vector3 basePosition;
         private float seed;
@@ -16,7 +19,6 @@ namespace Underwater
         private string threadId = string.Empty;
         private string title = "Untitled thread";
         private string statusMessage = "Archived";
-        private CodexPetDefinition petDefinition;
 
         public string ThreadId => threadId;
 
@@ -24,9 +26,9 @@ namespace Underwater
 
         public string StatusMessage => statusMessage;
 
-        public string PetId => petDefinition != null && !string.IsNullOrWhiteSpace(petDefinition.Id) ? petDefinition.Id : "unknown-pet";
+        public string PetId => petVisual != null ? petVisual.PetId : "unknown-pet";
 
-        public string PetDisplayName => petDefinition != null && !string.IsNullOrWhiteSpace(petDefinition.DisplayName) ? petDefinition.DisplayName : PetId;
+        public string PetDisplayName => petVisual != null ? petVisual.PetDisplayName : PetId;
 
         public bool Initialize(UnderwaterGameDirector director, AquariumArchivedPetSnapshot snapshot)
         {
@@ -35,35 +37,25 @@ namespace Underwater
             title = snapshot != null && !string.IsNullOrWhiteSpace(snapshot.title) ? snapshot.title.Trim() : "Untitled thread";
             statusMessage = snapshot != null && !string.IsNullOrWhiteSpace(snapshot.statusMessage) ? snapshot.statusMessage.Trim() : "Archived";
 
-            CodexPetDefinition pet = CodexPetCatalog.Shared.GetPetForSeed(threadId);
-
-            if (pet == null)
-            {
-                Debug.LogWarning("[ArchivedThreadPet] No Codex pet atlas is available; archived pet will not be created.");
-                return false;
-            }
-
-            petDefinition = pet;
-
             Vector3 position = snapshot != null && snapshot.position != null
                 ? snapshot.position.ToVector3()
                 : director.GetRandomSeafloorPoint(6f);
 
-            transform.position = new Vector3(position.x, director.GetSurfaceY(position) + 0.18f, position.z);
+            transform.position = new Vector3(position.x, director.GetSurfaceY(position) + TerrainGroundOffset, position.z);
             basePosition = transform.position;
             seed = Random.Range(0f, 100f);
             nextActionTimer = Random.Range(0.1f, 5f);
             hopTimer = Random.Range(0f, 1.5f);
             idleBobFrequency = Random.Range(0.8f, 1.7f);
-            petAnimator = CodexPetSpriteAnimator.Create(
-                transform,
-                pet,
-                CodexPetAnimationState.Waiting,
-                new Vector3(0f, 1.05f, 0f),
-                2.1f,
-                $"Archived Pet Sprite ({pet.DisplayName})");
-            petAnimator.SetPlaybackSpeed(Random.Range(0.55f, 1.65f));
-            petAnimator.RandomizePlayback(Random.value);
+            petVisual = ThreadPetAnimalVisual.Create(transform, threadId, ArchivedAnimalHeight);
+
+            if (petVisual == null)
+            {
+                Debug.LogWarning("[ArchivedThreadPet] No 3D animal prefab is available; archived pet will not be created.");
+                return false;
+            }
+
+            petVisual.SetState(CodexPetAnimationState.Waiting, Vector3.zero, false);
             return true;
         }
 
@@ -89,8 +81,7 @@ namespace Underwater
                 actionState = PickRandomState();
                 actionTimer = Random.Range(0.45f, 2.4f);
                 nextActionTimer = Random.Range(0.35f, 6.5f);
-                petAnimator?.SetPlaybackSpeed(Random.Range(0.5f, 2f));
-                petAnimator?.RandomizePlayback(Random.value);
+                petVisual?.SetState(actionState, Vector3.zero, false);
             }
 
             if (hopTimer <= 0f)
@@ -101,7 +92,7 @@ namespace Underwater
                 if (director != null)
                 {
                     basePosition = director.ClampPoint(basePosition, 3f);
-                    basePosition.y = director.GetSurfaceY(basePosition) + 0.18f;
+                    basePosition.y = director.GetSurfaceY(basePosition) + TerrainGroundOffset;
                 }
             }
 
@@ -112,11 +103,11 @@ namespace Underwater
 
             if (actionTimer > 0f)
             {
-                petAnimator?.SetState(actionState);
+                petVisual?.SetState(actionState, Vector3.zero, false);
             }
             else
             {
-                petAnimator?.SetState(CodexPetAnimationState.Waiting);
+                petVisual?.SetState(CodexPetAnimationState.Waiting, Vector3.zero, false);
             }
         }
 

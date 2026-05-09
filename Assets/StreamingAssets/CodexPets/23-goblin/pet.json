@@ -1,8 +1,0 @@
-{
-  "id": "goblin",
-  "displayName": "Goblin",
-  "description": "A cute compact Codex digital pet goblin with tiny ears and a mischievous friendly face.",
-  "kind": "creature",
-  "source": "codex-pets.net popular",
-  "spritesheetPath": "spritesheet.webp"
-}

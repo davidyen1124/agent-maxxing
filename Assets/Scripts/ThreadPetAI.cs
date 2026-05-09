@@ -4,14 +4,13 @@ namespace Underwater
 {
     public sealed class ThreadPetAI : MonoBehaviour
     {
-        private const float TerrainGroundOffset = 0.65f;
+        private const float TerrainGroundOffset = 0.05f;
         private const float TerrainTargetArrivalDistance = 0.95f;
         private const float TerrainSurfaceFollowSpeed = 12f;
+        private const float ActiveAnimalHeight = 1.4f;
 
         private UnderwaterGameDirector director;
-        private CodexPetSpriteAnimator petAnimator;
-        private Transform modelRoot;
-        private Vector3 modelBaseLocalPosition;
+        private ThreadPetAnimalVisual petVisual;
         private Vector3 velocity;
         private Vector3 swimTarget;
         private Vector3 homePosition;
@@ -39,7 +38,6 @@ namespace Underwater
         private string statusMessage = "Idle";
         private string phase = "idle";
         private float ageMinutes;
-        private CodexPetDefinition petDefinition;
 
         public string ThreadId => threadId;
 
@@ -53,9 +51,9 @@ namespace Underwater
 
         public Vector3 Velocity => velocity;
 
-        public string PetId => petDefinition != null && !string.IsNullOrWhiteSpace(petDefinition.Id) ? petDefinition.Id : "unknown-pet";
+        public string PetId => petVisual != null ? petVisual.PetId : "unknown-pet";
 
-        public string PetDisplayName => petDefinition != null && !string.IsNullOrWhiteSpace(petDefinition.DisplayName) ? petDefinition.DisplayName : PetId;
+        public string PetDisplayName => petVisual != null ? petVisual.PetDisplayName : PetId;
 
         private enum ChaosMoveMode
         {
@@ -83,30 +81,15 @@ namespace Underwater
 
             ApplySnapshot(snapshot);
 
-            CodexPetDefinition pet = CodexPetCatalog.Shared.GetPetForSeed(threadId);
+            petVisual = ThreadPetAnimalVisual.Create(transform, threadId, ActiveAnimalHeight);
 
-            if (pet == null)
+            if (petVisual == null)
             {
-                Debug.LogWarning("[ThreadPetAI] No Codex pet atlas is available; thread pet will not be created.");
+                Debug.LogWarning("[ThreadPetAI] No 3D animal prefab is available; thread pet will not be created.");
                 return false;
             }
 
-            petDefinition = pet;
-            modelRoot = new GameObject("Model").transform;
-            modelRoot.SetParent(transform);
-            modelRoot.localPosition = Vector3.zero;
-            modelRoot.localRotation = Quaternion.identity;
-            modelBaseLocalPosition = modelRoot.localPosition;
-
-            petAnimator = CodexPetSpriteAnimator.Create(
-                modelRoot,
-                pet,
-                GetPetState(),
-                new Vector3(0f, 0.65f, 0f),
-                2.6f,
-                $"Pet Sprite ({pet.DisplayName})");
-            petAnimator.SetPlaybackSpeed(Random.Range(0.72f, 1.85f));
-            petAnimator.RandomizePlayback(Random.value);
+            petVisual.SetState(GetPetState(), velocity, dashTimer > 0f);
 
             SphereCollider collider = gameObject.AddComponent<SphereCollider>();
             collider.radius = 0.85f;
@@ -134,7 +117,7 @@ namespace Underwater
                     : director.ClampPoint(snapshot.position.ToVector3(), 3f);
             }
 
-            petAnimator?.SetState(GetPetState());
+            petVisual?.SetState(GetPetState(), velocity, dashTimer > 0f);
         }
 
         public AquariumThreadSnapshot CreateSnapshot()
@@ -178,7 +161,7 @@ namespace Underwater
             AddBuoyancyBand(buoyancyTarget, 0.22f);
             MoveThread(desiredVelocity, GetAcceleration(), 4.1f, 1.4f);
             chaosImpulse = Vector3.Lerp(chaosImpulse, Vector3.zero, Time.deltaTime * 2.2f);
-            petAnimator?.SetState(GetPetState());
+            petVisual?.SetState(GetPetState(), velocity, dashTimer > 0f);
         }
 
         private void ConfigurePersonality()
@@ -210,8 +193,6 @@ namespace Underwater
                 actionState = PickRandomActionState();
                 actionTimer = Random.Range(0.35f, 2.2f);
                 nextActionTimer = Random.Range(0.25f, 4.5f);
-                petAnimator?.SetPlaybackSpeed(Random.Range(0.6f, 2.2f));
-                petAnimator?.RandomizePlayback(Random.value);
             }
 
             if (nextDashTimer <= 0f)
@@ -391,8 +372,7 @@ namespace Underwater
 
             MoveGroundedThread(desiredVelocity + horizontalImpulse, GetAcceleration(), 7.2f, 1.4f);
             chaosImpulse = Vector3.Lerp(chaosImpulse, Vector3.zero, Time.deltaTime * 2.2f);
-            UpdateGroundedModelMotion();
-            petAnimator?.SetState(GetPetState());
+            petVisual?.SetState(GetPetState(), velocity, dashTimer > 0f);
         }
 
         private void MoveGroundedThread(Vector3 desiredVelocity, float acceleration, float turnSpeed, float clampPadding)
@@ -415,22 +395,6 @@ namespace Underwater
                 Quaternion targetRotation = Quaternion.LookRotation(velocity.normalized, Vector3.up);
                 transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * turnSpeed);
             }
-        }
-
-        private void UpdateGroundedModelMotion()
-        {
-            if (modelRoot == null)
-            {
-                return;
-            }
-
-            float bob = actionState == CodexPetAnimationState.Jumping && actionTimer > 0f
-                ? Mathf.Abs(Mathf.Sin(Time.time * 9f + seed)) * 0.24f
-                : Mathf.Sin(Time.time * 5.5f + seed) * Mathf.Clamp01(velocity.magnitude / 3f) * 0.04f;
-            modelRoot.localPosition = Vector3.Lerp(
-                modelRoot.localPosition,
-                modelBaseLocalPosition + (Vector3.up * bob),
-                Time.deltaTime * 8f);
         }
 
         private Vector3 ProjectToTerrainGround(Vector3 point, float clampPadding = 1.4f)

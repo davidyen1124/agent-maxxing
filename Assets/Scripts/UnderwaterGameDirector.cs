@@ -44,7 +44,6 @@ namespace Underwater
         private Material kelpMaterial;
         private Material surfaceMaterial;
         private AquariumDirectorBridge aquariumBridge;
-        private CodexPetCatalog petCatalog;
         private Terrain[] sceneTerrains = Array.Empty<Terrain>();
         private AudioSource niaVoiceAudioSource;
         private UnderwaterUserSettings apiSettings;
@@ -57,7 +56,6 @@ namespace Underwater
         private string directorStatusLine = "Scanning Codex threads";
         private string nearestThreadTitle = "No active threads";
         private string nearestThreadPhase = "idle";
-        private bool startupLoading;
         private bool workThreadSpawnInFlight;
         private int spawnedWorkThreadCount;
         private string workThreadStatusLine = "Codex work thread spawner ready";
@@ -131,8 +129,7 @@ namespace Underwater
             CreatePlayer();
             ReloadApiSettings();
             _ = WarmRealtimeVoiceSessionAsync();
-            AttachAquariumBridge(false);
-            StartCoroutine(LoadCodexPetsThenAttachBridge());
+            AttachAquariumBridge(true);
         }
 
         private void Update()
@@ -167,7 +164,7 @@ namespace Underwater
 
             EnsureGuiStyles();
 
-            if (startupLoading || worldSyncLoading)
+            if (worldSyncLoading)
             {
                 DrawLoadingOverlay();
                 return;
@@ -457,12 +454,6 @@ namespace Underwater
 
         public void RequestWorkThreadSpawnFromPlayer()
         {
-            if (startupLoading)
-            {
-                SetWorkThreadStatus("Codex pets are still loading. Try again in a moment.");
-                return;
-            }
-
             if (workThreadSpawnInFlight)
             {
                 SetWorkThreadStatus("Already creating a Codex work thread.");
@@ -487,11 +478,6 @@ namespace Underwater
 
         public void BeginRealtimeVoiceQuestionFromPlayer()
         {
-            if (startupLoading)
-            {
-                return;
-            }
-
             if (niaVoiceCaptureRoutine != null && !string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
             {
                 return;
@@ -889,10 +875,9 @@ namespace Underwater
 
         private void DrawLoadingOverlay()
         {
-            bool loadingCatalog = startupLoading && petCatalog != null;
-            float progress = loadingCatalog ? petCatalog.LoadProgress : worldSyncProgress;
-            string title = loadingCatalog ? "Loading thread pets" : "Syncing threads";
-            string status = loadingCatalog ? petCatalog.LoadingStatus : worldSyncStatus;
+            float progress = worldSyncProgress;
+            string title = "Syncing threads";
+            string status = worldSyncStatus;
             float width = Mathf.Clamp(Screen.width - 48f, 280f, 520f);
             float height = 118f;
             float x = (Screen.width - width) * 0.5f;
@@ -1823,19 +1808,6 @@ namespace Underwater
                 UpdateBridgeState("starting", "Scanning Codex sessions");
                 aquariumBridge.StartBridge();
             }
-        }
-
-        private IEnumerator LoadCodexPetsThenAttachBridge()
-        {
-            startupLoading = true;
-            directorStatusLine = "Loading Codex pet sprites";
-            petCatalog = CodexPetCatalog.Shared;
-
-            yield return petCatalog.LoadAsync();
-            yield return null;
-
-            startupLoading = false;
-            AttachAquariumBridge(true);
         }
 
         private void CreateKelpCluster(Transform parent, int index)
