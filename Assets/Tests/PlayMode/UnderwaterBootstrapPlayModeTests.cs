@@ -20,11 +20,11 @@ namespace Underwater.Tests
             Assert.That(director, Is.Not.Null, "Runtime bootstrap should create the underwater director.");
             Assert.That(director.Player, Is.Not.Null, "Runtime bootstrap should create the player rig.");
             Assert.That(director.GetComponent<AquariumDirectorBridge>(), Is.Not.Null, "Runtime bootstrap should attach the Codex aquarium bridge.");
-            Assert.That(director.CountCreatures(CreatureKind.Shark), Is.EqualTo(5), "Expected the shark population to spawn.");
-            Assert.That(director.CountCreatures(CreatureKind.Lobster), Is.EqualTo(14), "Expected the lobster population to spawn.");
             Assert.That(GameObject.Find("Runtime Arena"), Is.Not.Null, "Expected the procedural arena root to be present.");
             Assert.That(Camera.main, Is.Not.Null, "Expected a main camera for first-person swimming.");
             Assert.That(director.Player.BoostNormalized, Is.GreaterThan(0.99f), "Player should start with full swim boost.");
+            Assert.That(director.ActiveThreadCount, Is.GreaterThanOrEqualTo(0), "Thread count should be readable on boot.");
+            Assert.That(director.ArchivedRollCount, Is.GreaterThanOrEqualTo(0), "Archived roll count should be readable on boot.");
         }
     }
 }

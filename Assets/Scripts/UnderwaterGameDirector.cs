@@ -10,29 +10,27 @@ namespace Underwater
 {
     public sealed class UnderwaterGameDirector : MonoBehaviour
     {
-        private const int SharkCount = 5;
-        private const int LobsterCount = 14;
-
-        private readonly List<SeaCreature> creatures = new List<SeaCreature>();
-        private readonly List<SharkAI> sharks = new List<SharkAI>();
-        private readonly List<LobsterAI> lobsters = new List<LobsterAI>();
+        private readonly Dictionary<string, ThreadLobsterAI> activeThreads = new Dictionary<string, ThreadLobsterAI>();
+        private readonly Dictionary<string, ArchivedThreadRoll> archivedRolls = new Dictionary<string, ArchivedThreadRoll>();
 
         private GUIStyle labelStyle;
         private GUIStyle headlineStyle;
+        private GUIStyle mutedStyle;
+        private GUIStyle panelStyle;
+        private GUIStyle threadTagStyle;
 
         private Material reefMaterial;
         private Material kelpMaterial;
-        private Material sharkBodyMaterial;
-        private Material sharkAccentMaterial;
-        private Material lobsterBodyMaterial;
-        private Material lobsterAccentMaterial;
+        private Material threadBodyMaterial;
+        private Material threadAccentMaterial;
+        private Material rollMaterial;
         private Material surfaceMaterial;
         private AquariumDirectorBridge aquariumBridge;
-        private int sharkIdCounter;
-        private int lobsterIdCounter;
         private int snapshotSequence;
         private string bridgeState = "offline";
-        private string directorStatusLine = "Codex director offline";
+        private string directorStatusLine = "Scanning Codex threads";
+        private string nearestThreadTitle = "No active threads";
+        private string nearestThreadPhase = "idle";
 
         public static UnderwaterGameDirector Instance { get; private set; }
 
@@ -42,7 +40,9 @@ namespace Underwater
 
         public UnderwaterPlayerController Player { get; private set; }
 
-        public string BridgeState => bridgeState;
+        public int ActiveThreadCount => activeThreads.Count;
+
+        public int ArchivedRollCount => archivedRolls.Count;
 
         private void Awake()
         {
@@ -63,8 +63,12 @@ namespace Underwater
             ConfigurePostProcessing();
             BuildArena();
             CreatePlayer();
-            SpawnPopulation();
             AttachAquariumBridge();
+        }
+
+        private void Update()
+        {
+            UpdateNearestThreadStatus();
         }
 
         private void OnDestroy()
@@ -84,24 +88,30 @@ namespace Underwater
 
             EnsureGuiStyles();
 
-            Rect panel = new Rect(16f, 16f, 340f, 166f);
-            GUI.Box(panel, GUIContent.none);
+            const float panelPaddingX = 14f;
+            const float panelPaddingY = 10f;
+            const float panelWidth = 330f;
+            string statusText = Shorten(directorStatusLine, 52);
+            float contentWidth = panelWidth - (panelPaddingX * 2f);
+            float contentHeight = CalculateHudContentHeight(contentWidth, statusText);
+            Rect panel = new Rect(16f, 16f, panelWidth, contentHeight + (panelPaddingY * 2f));
+            Rect content = new Rect(panel.x + panelPaddingX, panel.y + panelPaddingY, contentWidth, contentHeight);
+            GUI.color = new Color(0.03f, 0.08f, 0.12f, 0.9f);
+            GUI.Box(panel, GUIContent.none, panelStyle);
+            GUI.color = Color.white;
 
-            GUILayout.BeginArea(panel);
-            GUILayout.Space(8f);
-            GUILayout.Label("Underwater Swim Slice", headlineStyle);
-            GUILayout.Label("WASD move  Mouse look  Space rise  Ctrl dive", labelStyle);
-            GUILayout.Label("Shift sprint  Ambient reef pass  Esc unlock", labelStyle);
-            GUILayout.Space(8f);
-            DrawBar("Boost", Player.BoostNormalized, new Color(0.3f, 0.82f, 0.96f));
-            GUILayout.Space(6f);
-            GUILayout.Label($"Sharks active: {CountCreatures(CreatureKind.Shark)}", labelStyle);
-            GUILayout.Label($"Lobsters active: {CountCreatures(CreatureKind.Lobster)}", labelStyle);
-            GUILayout.Label($"Codex bridge: {bridgeState}", labelStyle);
-            GUILayout.Label(directorStatusLine, labelStyle);
+            GUILayout.BeginArea(content);
+            GUILayout.Label("Thread Reef", headlineStyle);
+            GUILayout.Space(4f);
+            GUILayout.Label("Boost", labelStyle);
+            DrawBar(Player.BoostNormalized, new Color(0.3f, 0.82f, 0.96f));
+            GUILayout.Space(4f);
+            GUILayout.Label($"Active threads: {ActiveThreadCount}", labelStyle);
+            GUILayout.Label($"Archived rolls: {ArchivedRollCount}", labelStyle);
+            GUILayout.Label(statusText, mutedStyle);
             GUILayout.EndArea();
 
-            DrawDebugPanel();
+            DrawThreadNameTags();
 
             if (!Player.HasPointerLock)
             {
@@ -110,59 +120,173 @@ namespace Underwater
             }
         }
 
-        public void RegisterCreature(SeaCreature creature)
+        public void SyncThreadWorld(IReadOnlyList<AquariumThreadSnapshot> threads, IReadOnlyList<AquariumArchivedRollSnapshot> rolls, string detail)
         {
-            if (creature == null || creatures.Contains(creature))
+            HashSet<string> liveIds = new HashSet<string>();
+
+            if (threads != null)
             {
-                return;
-            }
-
-            creatures.Add(creature);
-
-            if (creature is SharkAI shark)
-            {
-                sharks.Add(shark);
-            }
-            else if (creature is LobsterAI lobster)
-            {
-                lobsters.Add(lobster);
-            }
-        }
-
-        public void UnregisterCreature(SeaCreature creature)
-        {
-            if (creature == null)
-            {
-                return;
-            }
-
-            creatures.Remove(creature);
-
-            if (creature is SharkAI shark)
-            {
-                sharks.Remove(shark);
-            }
-            else if (creature is LobsterAI lobster)
-            {
-                lobsters.Remove(lobster);
-            }
-        }
-
-        public int CountCreatures(CreatureKind kind)
-        {
-            int count = 0;
-
-            for (int i = 0; i < creatures.Count; i++)
-            {
-                SeaCreature creature = creatures[i];
-
-                if (creature != null && creature.Kind == kind)
+                for (int i = 0; i < threads.Count; i++)
                 {
-                    count++;
+                    AquariumThreadSnapshot snapshot = threads[i];
+
+                    if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.id))
+                    {
+                        continue;
+                    }
+
+                    liveIds.Add(snapshot.id);
+
+                    if (activeThreads.TryGetValue(snapshot.id, out ThreadLobsterAI existing))
+                    {
+                        existing.ApplySnapshot(snapshot);
+                    }
+                    else
+                    {
+                        GameObject threadObject = new GameObject($"Thread {snapshot.id}");
+                        ThreadLobsterAI threadLobster = threadObject.AddComponent<ThreadLobsterAI>();
+                        threadLobster.Initialize(this, snapshot, threadBodyMaterial, threadAccentMaterial);
+                        activeThreads[snapshot.id] = threadLobster;
+                    }
                 }
             }
 
-            return count;
+            List<string> staleActiveIds = new List<string>();
+
+            foreach (KeyValuePair<string, ThreadLobsterAI> pair in activeThreads)
+            {
+                if (!liveIds.Contains(pair.Key))
+                {
+                    staleActiveIds.Add(pair.Key);
+                }
+            }
+
+            for (int i = 0; i < staleActiveIds.Count; i++)
+            {
+                string id = staleActiveIds[i];
+
+                if (activeThreads.TryGetValue(id, out ThreadLobsterAI creature))
+                {
+                    if (creature != null)
+                    {
+                        Destroy(creature.gameObject);
+                    }
+
+                    activeThreads.Remove(id);
+                }
+            }
+
+            HashSet<string> archivedIds = new HashSet<string>();
+
+            if (rolls != null)
+            {
+                for (int i = 0; i < rolls.Count; i++)
+                {
+                    AquariumArchivedRollSnapshot snapshot = rolls[i];
+
+                    if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.id))
+                    {
+                        continue;
+                    }
+
+                    archivedIds.Add(snapshot.id);
+
+                    if (archivedRolls.ContainsKey(snapshot.id))
+                    {
+                        continue;
+                    }
+
+                    GameObject rollObject = new GameObject($"Lobster Roll {snapshot.id}");
+                    ArchivedThreadRoll roll = rollObject.AddComponent<ArchivedThreadRoll>();
+                    roll.Initialize(this, snapshot, rollMaterial);
+                    archivedRolls[snapshot.id] = roll;
+                }
+            }
+
+            List<string> staleArchivedIds = new List<string>();
+
+            foreach (KeyValuePair<string, ArchivedThreadRoll> pair in archivedRolls)
+            {
+                if (!archivedIds.Contains(pair.Key))
+                {
+                    staleArchivedIds.Add(pair.Key);
+                }
+            }
+
+            for (int i = 0; i < staleArchivedIds.Count; i++)
+            {
+                string id = staleArchivedIds[i];
+
+                if (archivedRolls.TryGetValue(id, out ArchivedThreadRoll roll))
+                {
+                    if (roll != null)
+                    {
+                        Destroy(roll.gameObject);
+                    }
+
+                    archivedRolls.Remove(id);
+                }
+            }
+
+            directorStatusLine = string.IsNullOrWhiteSpace(detail)
+                ? $"Synced {ActiveThreadCount} swimming threads and {ArchivedRollCount} rolls."
+                : detail;
+            UpdateNearestThreadStatus();
+        }
+
+        public void UpdateBridgeState(string state, string detail)
+        {
+            bridgeState = string.IsNullOrWhiteSpace(state) ? "offline" : state;
+
+            if (!string.IsNullOrWhiteSpace(detail))
+            {
+                directorStatusLine = detail;
+            }
+        }
+
+        public AquariumDirectorSnapshot CreateSnapshot()
+        {
+            List<AquariumThreadSnapshot> threadSnapshots = new List<AquariumThreadSnapshot>(activeThreads.Count);
+
+            foreach (KeyValuePair<string, ThreadLobsterAI> pair in activeThreads)
+            {
+                if (pair.Value != null)
+                {
+                    threadSnapshots.Add(pair.Value.CreateSnapshot());
+                }
+            }
+
+            List<AquariumArchivedRollSnapshot> rollSnapshots = new List<AquariumArchivedRollSnapshot>(archivedRolls.Count);
+
+            foreach (KeyValuePair<string, ArchivedThreadRoll> pair in archivedRolls)
+            {
+                if (pair.Value != null)
+                {
+                    rollSnapshots.Add(pair.Value.CreateSnapshot());
+                }
+            }
+
+            return new AquariumDirectorSnapshot
+            {
+                sequence = ++snapshotSequence,
+                capturedAtUtc = DateTime.UtcNow.ToString("o"),
+                summary = BuildWorldSummary(),
+                metrics = new AquariumDirectorMetrics
+                {
+                    activeThreads = ActiveThreadCount,
+                    archivedRolls = ArchivedRollCount,
+                    bridgeState = bridgeState
+                },
+                player = new AquariumPlayerSnapshot
+                {
+                    position = SerializableVector3.FromVector3(Player != null ? Player.transform.position : Vector3.zero),
+                    forward = SerializableVector3.FromVector3(Player != null ? Player.transform.forward : Vector3.forward),
+                    boostNormalized = Player != null ? Player.BoostNormalized : 0f,
+                    hasPointerLock = Player != null && Player.HasPointerLock
+                },
+                threads = threadSnapshots.ToArray(),
+                archivedRolls = rollSnapshots.ToArray()
+            };
         }
 
         public Vector3 GetRandomPoint(float margin = 4f)
@@ -201,118 +325,6 @@ namespace Underwater
             return point;
         }
 
-        public string AllocateCreatureId(CreatureKind kind)
-        {
-            switch (kind)
-            {
-                case CreatureKind.Shark:
-                    sharkIdCounter++;
-                    return $"shark-{sharkIdCounter:D2}";
-                default:
-                    lobsterIdCounter++;
-                    return $"lobster-{lobsterIdCounter:D2}";
-            }
-        }
-
-        public void UpdateBridgeState(string state, string detail)
-        {
-            bridgeState = string.IsNullOrWhiteSpace(state) ? "offline" : state;
-            directorStatusLine = string.IsNullOrWhiteSpace(detail) ? "Codex director waiting for world snapshots" : detail;
-        }
-
-        public AquariumDirectorSnapshot CreateSnapshot()
-        {
-            AquariumDirectorSnapshot snapshot = new AquariumDirectorSnapshot
-            {
-                sequence = ++snapshotSequence,
-                capturedAtUtc = DateTime.UtcNow.ToString("o"),
-                summary = BuildWorldSummary(),
-                metrics = new AquariumDirectorMetrics
-                {
-                    sharkCount = CountCreatures(CreatureKind.Shark),
-                    lobsterCount = CountCreatures(CreatureKind.Lobster),
-                    bridgeState = bridgeState
-                },
-                player = new AquariumPlayerSnapshot
-                {
-                    position = SerializableVector3.FromVector3(Player != null ? Player.transform.position : Vector3.zero),
-                    forward = SerializableVector3.FromVector3(Player != null ? Player.transform.forward : Vector3.forward),
-                    boostNormalized = Player != null ? Player.BoostNormalized : 0f,
-                    hasPointerLock = Player != null && Player.HasPointerLock
-                },
-                sharks = CreateCreatureSnapshots(sharks),
-                lobsters = CreateCreatureSnapshots(lobsters)
-            };
-
-            return snapshot;
-        }
-
-        public AquariumDirectorActionResult ApplyDirectorAction(AquariumDirectorAction action)
-        {
-            AquariumDirectorActionResult result = new AquariumDirectorActionResult
-            {
-                actionId = action != null ? action.actionId : string.Empty,
-                success = false,
-                message = "Missing action payload.",
-                affectedCreatureIds = Array.Empty<string>()
-            };
-
-            if (action == null || string.IsNullOrWhiteSpace(action.species))
-            {
-                return result;
-            }
-
-            List<SeaCreature> candidates = ResolveSpeciesPool(action.species);
-
-            if (candidates.Count == 0)
-            {
-                result.message = $"No {action.species} are available.";
-                return result;
-            }
-
-            Vector3 referencePoint = action.target != null
-                ? action.target.ToVector3()
-                : Player != null ? Player.transform.position : Vector3.zero;
-            List<SeaCreature> selected = SelectCreatures(candidates, action, referencePoint);
-
-            if (selected.Count == 0)
-            {
-                result.message = $"No {action.species} matched scope '{action.scope}'.";
-                return result;
-            }
-
-            if (!TryParseDirective(action.directive, out CreatureDirectiveMode directiveMode))
-            {
-                result.message = $"Unsupported directive '{action.directive}'.";
-                return result;
-            }
-
-            for (int i = 0; i < selected.Count; i++)
-            {
-                SeaCreature creature = selected[i];
-
-                if (directiveMode == CreatureDirectiveMode.Autonomous)
-                {
-                    creature.ClearDirective();
-                }
-                else
-                {
-                    Vector3 directiveTarget = action.target != null ? action.target.ToVector3() : creature.transform.position;
-                    creature.ApplyDirective(
-                        directiveMode,
-                        ClampPoint(directiveTarget, 2f),
-                        Mathf.Max(1f, action.radius),
-                        Mathf.Max(0f, action.durationSeconds));
-                }
-            }
-
-            result.success = true;
-            result.affectedCreatureIds = CreateCreatureIds(selected);
-            result.message = $"Applied {directiveMode} to {selected.Count} {action.species}.";
-            directorStatusLine = result.message;
-            return result;
-        }
-
         private void EnsureGuiStyles()
         {
             if (labelStyle != null)
@@ -326,19 +338,39 @@ namespace Underwater
                 fontSize = 13
             };
 
+            panelStyle = new GUIStyle(GUI.skin.box)
+            {
+                padding = new RectOffset(14, 14, 10, 10)
+            };
+
+            panelStyle.normal.background = Texture2D.whiteTexture;
+            panelStyle.normal.textColor = Color.white;
+
+            mutedStyle = new GUIStyle(labelStyle)
+            {
+                normal = { textColor = new Color(0.76f, 0.9f, 0.95f) },
+                fontSize = 12
+            };
+
             headlineStyle = new GUIStyle(labelStyle)
             {
                 fontSize = 18,
                 fontStyle = FontStyle.Bold
             };
+
+            threadTagStyle = new GUIStyle(labelStyle)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 11,
+                clipping = TextClipping.Clip,
+                padding = new RectOffset(8, 8, 4, 4)
+            };
         }
 
-        private void DrawBar(string label, float normalizedValue, Color fillColor)
+        private void DrawBar(float normalizedValue, Color fillColor)
         {
             Rect rowRect = GUILayoutUtility.GetRect(220f, 18f, GUILayout.ExpandWidth(true));
-            GUI.Label(new Rect(rowRect.x, rowRect.y, 54f, rowRect.height), label, labelStyle);
-
-            Rect barRect = new Rect(rowRect.x + 58f, rowRect.y + 3f, rowRect.width - 64f, 12f);
+            Rect barRect = new Rect(rowRect.x, rowRect.y + 3f, rowRect.width, 12f);
             GUI.color = new Color(0.06f, 0.12f, 0.16f, 0.9f);
             GUI.DrawTexture(barRect, Texture2D.whiteTexture);
 
@@ -348,33 +380,199 @@ namespace Underwater
             GUI.color = Color.white;
         }
 
-        private void DrawDebugPanel()
+        private float CalculateHudContentHeight(float contentWidth, string statusText)
         {
-            if (aquariumBridge == null)
+            return MeasureGuiTextHeight(headlineStyle, "Thread Reef", contentWidth)
+                + 4f
+                + MeasureGuiTextHeight(labelStyle, "Boost", contentWidth)
+                + 18f
+                + 4f
+                + MeasureGuiTextHeight(labelStyle, $"Active threads: {ActiveThreadCount}", contentWidth)
+                + MeasureGuiTextHeight(labelStyle, $"Archived rolls: {ArchivedRollCount}", contentWidth)
+                + MeasureGuiTextHeight(mutedStyle, statusText, contentWidth)
+                + 2f;
+        }
+
+        private static float MeasureGuiTextHeight(GUIStyle style, string text, float width)
+        {
+            float calculatedHeight = style.CalcHeight(new GUIContent(text), width);
+            float fallbackHeight = style.lineHeight > 0f ? style.lineHeight : style.fontSize + 4f;
+            return Mathf.Max(calculatedHeight, fallbackHeight);
+        }
+
+        private static string Shorten(string text, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(text) || maxLength < 4)
+            {
+                return string.Empty;
+            }
+
+            string trimmed = text.Trim();
+
+            if (trimmed.Length <= maxLength)
+            {
+                return trimmed;
+            }
+
+            return trimmed.Substring(0, maxLength - 3) + "...";
+        }
+
+        private void DrawThreadNameTags()
+        {
+            Camera camera = Camera.main;
+
+            if (camera == null)
             {
                 return;
             }
 
-            Rect panel = new Rect(16f, 192f, 430f, 188f);
-            GUI.Box(panel, GUIContent.none);
+            foreach (KeyValuePair<string, ThreadLobsterAI> pair in activeThreads)
+            {
+                ThreadLobsterAI thread = pair.Value;
 
-            GUILayout.BeginArea(panel);
-            GUILayout.Space(8f);
-            GUILayout.Label("Aquarium Director Debug", headlineStyle);
-            GUILayout.Label($"Codex app-server socket: {(aquariumBridge.IsUnitySocketOpen ? "open" : "closed")}", labelStyle);
-            GUILayout.Label($"App-server URL: {aquariumBridge.BridgeUrl}", labelStyle);
-            GUILayout.Label($"Thread ready: {(aquariumBridge.IsThreadReady ? "yes" : "no")}", labelStyle);
-            GUILayout.Label($"Codex linked: {(aquariumBridge.IsCodexConnected ? "yes" : "no")}", labelStyle);
-            GUILayout.Label($"Thread: {aquariumBridge.LastThreadId}", labelStyle);
-            GUILayout.Label($"Turn: {aquariumBridge.LastTurnId}", labelStyle);
-            GUILayout.Label($"Session: {aquariumBridge.SessionId}", labelStyle);
-            GUILayout.Label($"Last snapshot: #{aquariumBridge.LastSnapshotSequence} at {aquariumBridge.LastSnapshotSentAtUtc}", labelStyle);
-            GUILayout.Label($"Last action: {aquariumBridge.LastActionId}", labelStyle);
-            GUILayout.Label($"Last tool: {aquariumBridge.LastTool}", labelStyle);
-            GUILayout.Label($"Last result: {aquariumBridge.LastActionSummary}", labelStyle);
-            GUILayout.Label($"Codex phase: {aquariumBridge.LastCodexPhase}", labelStyle);
-            GUILayout.Label(aquariumBridge.LastCodexText, labelStyle);
-            GUILayout.EndArea();
+                if (thread == null)
+                {
+                    continue;
+                }
+
+                string title = Shorten(thread.Title, 24);
+                DrawNameTag(camera, title, thread.transform.position + Vector3.up * 1.35f, new Color(0.03f, 0.08f, 0.12f, 0.88f));
+            }
+
+            foreach (KeyValuePair<string, ArchivedThreadRoll> pair in archivedRolls)
+            {
+                ArchivedThreadRoll roll = pair.Value;
+
+                if (roll == null)
+                {
+                    continue;
+                }
+
+                string title = Shorten(roll.Title, 24);
+                DrawNameTag(camera, title, roll.transform.position + Vector3.up * 0.9f, new Color(0.11f, 0.08f, 0.04f, 0.88f));
+            }
+        }
+
+        private void DrawNameTag(Camera camera, string title, Vector3 worldAnchor, Color backgroundColor)
+        {
+            if (camera == null || string.IsNullOrWhiteSpace(title))
+            {
+                return;
+            }
+
+            Vector3 screenPoint = camera.WorldToScreenPoint(worldAnchor);
+
+            if (screenPoint.z <= 0f)
+            {
+                return;
+            }
+
+            Vector2 size = threadTagStyle.CalcSize(new GUIContent(title));
+            float width = Mathf.Clamp(size.x + 10f, 88f, 180f);
+            float height = 22f;
+            float x = Mathf.Clamp(screenPoint.x - (width * 0.5f), 6f, Screen.width - width - 6f);
+            float y = Mathf.Clamp(Screen.height - screenPoint.y - 12f, 6f, Screen.height - height - 6f);
+            Rect tagRect = new Rect(x, y, width, height);
+
+            GUI.color = backgroundColor;
+            GUI.Box(tagRect, GUIContent.none, panelStyle);
+            GUI.color = Color.white;
+            GUI.Label(tagRect, title, threadTagStyle);
+        }
+
+        private void UpdateNearestThreadStatus()
+        {
+            if (Player == null || activeThreads.Count == 0)
+            {
+                nearestThreadTitle = "No active threads";
+                nearestThreadPhase = "idle";
+                return;
+            }
+
+            ThreadLobsterAI nearest = null;
+            float nearestDistance = float.MaxValue;
+            Vector3 playerPosition = Player.transform.position;
+
+            foreach (KeyValuePair<string, ThreadLobsterAI> pair in activeThreads)
+            {
+                ThreadLobsterAI thread = pair.Value;
+
+                if (thread == null)
+                {
+                    continue;
+                }
+
+                float distance = Vector3.SqrMagnitude(thread.transform.position - playerPosition);
+
+                if (distance < nearestDistance)
+                {
+                    nearestDistance = distance;
+                    nearest = thread;
+                }
+            }
+
+            if (nearest == null)
+            {
+                nearestThreadTitle = "No active threads";
+                nearestThreadPhase = "idle";
+                return;
+            }
+
+            nearestThreadTitle = nearest.Title;
+            nearestThreadPhase = nearest.Phase;
+        }
+
+        private string BuildWorldSummary()
+        {
+            StringBuilder summary = new StringBuilder();
+            Vector3 playerPosition = Player != null ? Player.transform.position : Vector3.zero;
+            summary.Append("Player at ");
+            summary.Append(FormatVector(playerPosition));
+            summary.Append(". ");
+            summary.Append(ActiveThreadCount);
+            summary.Append(" active thread creatures swimming, ");
+            summary.Append(ArchivedRollCount);
+            summary.Append(" archived lobster rolls resting on the seafloor. ");
+
+            ThreadLobsterAI nearest = null;
+            float nearestDistance = float.MaxValue;
+
+            foreach (KeyValuePair<string, ThreadLobsterAI> pair in activeThreads)
+            {
+                ThreadLobsterAI thread = pair.Value;
+
+                if (thread == null)
+                {
+                    continue;
+                }
+
+                float distance = Vector3.SqrMagnitude(thread.transform.position - playerPosition);
+
+                if (distance < nearestDistance)
+                {
+                    nearestDistance = distance;
+                    nearest = thread;
+                }
+            }
+
+            if (nearest != null)
+            {
+                summary.Append("Nearest thread is '");
+                summary.Append(nearest.Title);
+                summary.Append("' in phase ");
+                summary.Append(nearest.Phase);
+                summary.Append(" at ");
+                summary.Append(FormatVector(nearest.transform.position));
+                summary.Append(". ");
+            }
+
+            summary.Append(directorStatusLine);
+            return summary.ToString().Trim();
+        }
+
+        private static string FormatVector(Vector3 vector)
+        {
+            return $"({vector.x:F1}, {vector.y:F1}, {vector.z:F1})";
         }
 
         private void ConfigureLighting()
@@ -545,23 +743,6 @@ namespace Underwater
             Player.Initialize(this, controller, viewPivotObject.transform, camera);
         }
 
-        private void SpawnPopulation()
-        {
-            for (int i = 0; i < SharkCount; i++)
-            {
-                GameObject sharkObject = new GameObject($"Shark {i + 1}");
-                SharkAI shark = sharkObject.AddComponent<SharkAI>();
-                shark.Initialize(this, GetRandomMidWaterPoint(), sharkBodyMaterial, sharkAccentMaterial);
-            }
-
-            for (int i = 0; i < LobsterCount; i++)
-            {
-                GameObject lobsterObject = new GameObject($"Lobster {i + 1}");
-                LobsterAI lobster = lobsterObject.AddComponent<LobsterAI>();
-                lobster.Initialize(this, GetRandomSeafloorPoint(), lobsterBodyMaterial, lobsterAccentMaterial);
-            }
-        }
-
         private void AttachAquariumBridge()
         {
             aquariumBridge = GetComponent<AquariumDirectorBridge>();
@@ -572,222 +753,7 @@ namespace Underwater
             }
 
             aquariumBridge.Initialize(this);
-            UpdateBridgeState("starting", "Aquarium bridge booting");
-        }
-
-        private AquariumCreatureSnapshot[] CreateCreatureSnapshots<T>(List<T> source) where T : SeaCreature
-        {
-            AquariumCreatureSnapshot[] snapshots = new AquariumCreatureSnapshot[source.Count];
-
-            for (int i = 0; i < source.Count; i++)
-            {
-                snapshots[i] = source[i].CreateSnapshot();
-            }
-
-            return snapshots;
-        }
-
-        private string BuildWorldSummary()
-        {
-            Vector3 playerPosition = Player != null ? Player.transform.position : Vector3.zero;
-            SeaCreature nearestShark = FindNearestCreature(sharks, playerPosition);
-            SeaCreature nearestLobster = FindNearestCreature(lobsters, playerPosition);
-            StringBuilder summary = new StringBuilder();
-            summary.Append("Player at ");
-            summary.Append(FormatVector(playerPosition));
-            summary.Append(". ");
-            summary.Append(CountCreatures(CreatureKind.Shark));
-            summary.Append(" sharks active, ");
-            summary.Append(CountCreatures(CreatureKind.Lobster));
-            summary.Append(" lobsters active. ");
-
-            if (nearestShark != null)
-            {
-                summary.Append("Closest shark ");
-                summary.Append(nearestShark.CreatureId);
-                summary.Append(" at ");
-                summary.Append(FormatVector(nearestShark.transform.position));
-                summary.Append(" running ");
-                summary.Append(nearestShark.DirectiveMode);
-                summary.Append(". ");
-            }
-
-            if (nearestLobster != null)
-            {
-                summary.Append("Closest lobster ");
-                summary.Append(nearestLobster.CreatureId);
-                summary.Append(" at ");
-                summary.Append(FormatVector(nearestLobster.transform.position));
-                summary.Append(" running ");
-                summary.Append(nearestLobster.DirectiveMode);
-                summary.Append(".");
-            }
-
-            return summary.ToString().Trim();
-        }
-
-        private SeaCreature FindNearestCreature<T>(List<T> source, Vector3 point) where T : SeaCreature
-        {
-            SeaCreature nearest = null;
-            float nearestDistance = float.MaxValue;
-
-            for (int i = 0; i < source.Count; i++)
-            {
-                T creature = source[i];
-
-                if (creature == null)
-                {
-                    continue;
-                }
-
-                float distance = Vector3.SqrMagnitude(creature.transform.position - point);
-
-                if (distance < nearestDistance)
-                {
-                    nearestDistance = distance;
-                    nearest = creature;
-                }
-            }
-
-            return nearest;
-        }
-
-        private List<SeaCreature> ResolveSpeciesPool(string species)
-        {
-            List<SeaCreature> pool = new List<SeaCreature>();
-            string normalizedSpecies = species.Trim().ToLowerInvariant();
-
-            if (normalizedSpecies == "shark" || normalizedSpecies == "sharks")
-            {
-                for (int i = 0; i < sharks.Count; i++)
-                {
-                    if (sharks[i] != null)
-                    {
-                        pool.Add(sharks[i]);
-                    }
-                }
-
-                return pool;
-            }
-
-            if (normalizedSpecies != "lobster" && normalizedSpecies != "lobsters")
-            {
-                return pool;
-            }
-
-            for (int i = 0; i < lobsters.Count; i++)
-            {
-                if (lobsters[i] != null)
-                {
-                    pool.Add(lobsters[i]);
-                }
-            }
-
-            return pool;
-        }
-
-        private List<SeaCreature> SelectCreatures(List<SeaCreature> source, AquariumDirectorAction action, Vector3 referencePoint)
-        {
-            string scope = string.IsNullOrWhiteSpace(action.scope) ? "all" : action.scope.Trim().ToLowerInvariant();
-            List<SeaCreature> selected = new List<SeaCreature>();
-
-            if (scope == "ids" && action.creatureIds != null && action.creatureIds.Length > 0)
-            {
-                for (int i = 0; i < action.creatureIds.Length; i++)
-                {
-                    string id = action.creatureIds[i];
-
-                    for (int j = 0; j < source.Count; j++)
-                    {
-                        if (source[j].CreatureId == id)
-                        {
-                            selected.Add(source[j]);
-                            break;
-                        }
-                    }
-                }
-
-                return selected;
-            }
-
-            if (scope == "nearest_to_player" || scope == "nearest_to_point")
-            {
-                List<SeaCreature> ordered = new List<SeaCreature>(source);
-                ordered.Sort((left, right) =>
-                    Vector3.SqrMagnitude(left.transform.position - referencePoint)
-                        .CompareTo(Vector3.SqrMagnitude(right.transform.position - referencePoint)));
-
-                int takeCount = Mathf.Clamp(action.count <= 0 ? 1 : action.count, 1, ordered.Count);
-
-                for (int i = 0; i < takeCount; i++)
-                {
-                    selected.Add(ordered[i]);
-                }
-
-                return selected;
-            }
-
-            selected.AddRange(source);
-            return selected;
-        }
-
-        private bool TryParseDirective(string rawDirective, out CreatureDirectiveMode directiveMode)
-        {
-            string normalizedDirective = (rawDirective ?? string.Empty).Trim();
-
-            if (Enum.TryParse(normalizedDirective, true, out directiveMode))
-            {
-                return true;
-            }
-
-            switch (normalizedDirective.ToLowerInvariant())
-            {
-                case "":
-                case "autonomous":
-                case "clear":
-                    directiveMode = CreatureDirectiveMode.Autonomous;
-                    return true;
-                case "move":
-                case "move_to_point":
-                    directiveMode = CreatureDirectiveMode.MoveToPoint;
-                    return true;
-                case "guard":
-                case "guard_zone":
-                    directiveMode = CreatureDirectiveMode.GuardZone;
-                    return true;
-                case "pressure_player":
-                case "attack_player":
-                    directiveMode = CreatureDirectiveMode.PressurePlayer;
-                    return true;
-                case "retreat":
-                case "retreat_from_player":
-                    directiveMode = CreatureDirectiveMode.RetreatFromPlayer;
-                    return true;
-                case "hold":
-                case "hold_position":
-                    directiveMode = CreatureDirectiveMode.HoldPosition;
-                    return true;
-                default:
-                    directiveMode = CreatureDirectiveMode.Autonomous;
-                    return false;
-            }
-        }
-
-        private string[] CreateCreatureIds(List<SeaCreature> creaturesToList)
-        {
-            string[] ids = new string[creaturesToList.Count];
-
-            for (int i = 0; i < creaturesToList.Count; i++)
-            {
-                ids[i] = creaturesToList[i].CreatureId;
-            }
-
-            return ids;
-        }
-
-        private static string FormatVector(Vector3 vector)
-        {
-            return $"({vector.x:F1}, {vector.y:F1}, {vector.z:F1})";
+            UpdateBridgeState("starting", "Scanning Codex sessions");
         }
 
         private void CreateKelpCluster(Transform parent, int index)
@@ -856,7 +822,6 @@ namespace Underwater
 
             ParticleSystem.VelocityOverLifetimeModule velocityOverLifetime = particleSystem.velocityOverLifetime;
             velocityOverLifetime.enabled = true;
-            // Unity requires all velocity curves in this module to share the same mode.
             velocityOverLifetime.x = new ParticleSystem.MinMaxCurve(-0.16f, 0.16f);
             velocityOverLifetime.y = new ParticleSystem.MinMaxCurve(0f, 0f);
             velocityOverLifetime.z = new ParticleSystem.MinMaxCurve(-0.16f, 0.16f);
@@ -925,10 +890,9 @@ namespace Underwater
         {
             reefMaterial = CreateLitMaterial(new Color(0.14f, 0.2f, 0.19f), new Color(0.04f, 0.09f, 0.08f), 0.18f, 0.03f);
             kelpMaterial = CreateLitMaterial(new Color(0.1f, 0.25f, 0.16f), new Color(0.02f, 0.08f, 0.05f), 0.32f, 0.02f);
-            sharkBodyMaterial = CreateLitMaterial(new Color(0.28f, 0.42f, 0.5f), new Color(0.04f, 0.11f, 0.16f), 0.56f, 0.08f);
-            sharkAccentMaterial = CreateLitMaterial(new Color(0.74f, 0.86f, 0.94f), new Color(0.08f, 0.16f, 0.2f), 0.18f, 0f);
-            lobsterBodyMaterial = CreateLitMaterial(new Color(0.74f, 0.26f, 0.17f), new Color(0.22f, 0.05f, 0.03f), 0.36f, 0.04f);
-            lobsterAccentMaterial = CreateLitMaterial(new Color(0.96f, 0.57f, 0.3f), new Color(0.28f, 0.11f, 0.05f), 0.22f, 0f);
+            threadBodyMaterial = CreateLitMaterial(new Color(0.78f, 0.32f, 0.18f), new Color(0.22f, 0.05f, 0.03f), 0.36f, 0.04f);
+            threadAccentMaterial = CreateLitMaterial(new Color(0.98f, 0.68f, 0.34f), new Color(0.28f, 0.11f, 0.05f), 0.22f, 0f);
+            rollMaterial = CreateLitMaterial(new Color(0.88f, 0.67f, 0.4f), new Color(0.18f, 0.08f, 0.03f), 0.28f, 0.02f);
             surfaceMaterial = CreateUnlitMaterial(new Color(0.3f, 0.78f, 0.88f, 0.18f));
         }
 
@@ -1015,7 +979,7 @@ namespace Underwater
                 }
             }
 
-            return Shader.Find("Standard");
+            throw new InvalidOperationException("Unable to find a supported shader for the underwater slice.");
         }
     }
 }

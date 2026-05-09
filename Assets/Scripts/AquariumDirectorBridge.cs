@@ -15,69 +15,84 @@ namespace Underwater
     public sealed class AquariumDirectorBridge : MonoBehaviour
     {
         [SerializeField] private string codexServerUrl = "ws://127.0.0.1:4500";
-        [SerializeField] private float snapshotIntervalSeconds = 1.5f;
         [SerializeField] private float reconnectDelaySeconds = 3f;
+        [SerializeField] private float worldSyncIntervalSeconds = 3f;
         [SerializeField] private bool autoConnect = true;
 
         private readonly ConcurrentDictionary<int, TaskCompletionSource<Dictionary<string, object>>> pendingResponses =
             new ConcurrentDictionary<int, TaskCompletionSource<Dictionary<string, object>>>();
         private readonly ConcurrentQueue<Action> mainThreadActions = new ConcurrentQueue<Action>();
         private readonly SemaphoreSlim sendGate = new SemaphoreSlim(1, 1);
+        private readonly Dictionary<string, PendingWorldThread> pendingWorldThreads = new Dictionary<string, PendingWorldThread>();
 
         private UnderwaterGameDirector director;
         private CancellationTokenSource lifecycleCts;
         private Task connectionLoopTask;
         private ClientWebSocket socket;
-        private AquariumDirectorSnapshot queuedSnapshot;
         private int requestId;
-        private float nextSnapshotAt;
-
-        private string sessionId = "-";
-        private string threadId = "-";
-        private string turnId = "-";
-        private string lastSnapshotSentAtUtc = "never";
-        private string lastActionSummary = "none";
-        private string lastCodexPhase = "offline";
-        private string lastCodexText = "Codex director offline";
-        private string lastTool = "-";
-        private string lastActionId = "-";
-        private int lastSnapshotSequence;
+        private float nextWorldSyncAt;
         private bool appServerSocketOpen;
         private bool codexConnected;
-        private bool threadReady;
-        private bool turnInFlight;
+        private string codexHomePath;
+        private string sessionIndexPath;
+        private string sessionsRootPath;
+        private string archivedSessionsRootPath;
+        private string lastCodexPhase = "offline";
+        private string lastCodexText = "Thread mirror offline";
+
+        private sealed class PendingWorldThread
+        {
+            public string id;
+            public string title;
+            public string createdAtUtc;
+            public string source;
+        }
+
+        #pragma warning disable 0649
+        [Serializable]
+        private sealed class SessionIndexEntry
+        {
+            public string id;
+            public string thread_name;
+            public string updated_at;
+        }
+        #pragma warning restore 0649
+
+        private sealed class SessionIndexRecord
+        {
+            public string id;
+            public string title;
+            public string updatedAtUtc;
+
+            public static SessionIndexRecord CreateFallback(string id, string title, string updatedAtUtc)
+            {
+                return new SessionIndexRecord
+                {
+                    id = id,
+                    title = title,
+                    updatedAtUtc = updatedAtUtc
+                };
+            }
+        }
 
         public string BridgeUrl => codexServerUrl;
 
-        public bool IsUnitySocketOpen => appServerSocketOpen;
-
-        public bool IsThreadReady => threadReady;
-
-        public string SessionId => sessionId;
-
-        public string LastSnapshotSentAtUtc => lastSnapshotSentAtUtc;
-
-        public int LastSnapshotSequence => lastSnapshotSequence;
-
-        public string LastActionSummary => lastActionSummary;
-
-        public string LastCodexPhase => lastCodexPhase;
-
-        public string LastCodexText => lastCodexText;
-
-        public string LastThreadId => threadId;
-
-        public string LastTurnId => turnId;
-
-        public string LastTool => lastTool;
-
-        public string LastActionId => lastActionId;
-
-        public bool IsCodexConnected => codexConnected;
+        public bool IsConnected => codexConnected && appServerSocketOpen;
 
         public void Initialize(UnderwaterGameDirector owningDirector)
         {
             director = owningDirector;
+            codexHomePath = Environment.GetEnvironmentVariable("CODEX_HOME");
+
+            if (string.IsNullOrWhiteSpace(codexHomePath))
+            {
+                string homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                codexHomePath = Path.Combine(homeDirectory, ".codex");
+            }
+
+            sessionIndexPath = Path.Combine(codexHomePath, "session_index.jsonl");
+            sessionsRootPath = Path.Combine(codexHomePath, "sessions");
+            archivedSessionsRootPath = Path.Combine(codexHomePath, "archived_sessions");
         }
 
         private void Start()
@@ -92,26 +107,13 @@ namespace Underwater
         {
             DrainMainThreadActions();
 
-            if (director == null || !threadReady)
+            if (director == null || Time.unscaledTime < nextWorldSyncAt)
             {
                 return;
             }
 
-            if (Time.unscaledTime < nextSnapshotAt)
-            {
-                return;
-            }
-
-            nextSnapshotAt = Time.unscaledTime + Mathf.Max(0.5f, snapshotIntervalSeconds);
-            AquariumDirectorSnapshot snapshot = director.CreateSnapshot();
-            queuedSnapshot = snapshot;
-            lastSnapshotSequence = snapshot.sequence;
-            lastSnapshotSentAtUtc = snapshot.capturedAtUtc ?? DateTime.UtcNow.ToString("o");
-
-            if (!turnInFlight)
-            {
-                _ = StartTurnFromSnapshotAsync(snapshot, lifecycleCts != null ? lifecycleCts.Token : CancellationToken.None);
-            }
+            nextWorldSyncAt = Time.unscaledTime + Mathf.Max(1f, worldSyncIntervalSeconds);
+            RefreshWorldFromCodexState();
         }
 
         private void OnDestroy()
@@ -148,6 +150,78 @@ namespace Underwater
             }
 
             connectionLoopTask = null;
+            appServerSocketOpen = false;
+            codexConnected = false;
+        }
+
+        public Task<string> CreateWorkThreadAsync(string title, string prompt)
+        {
+            CancellationToken token = lifecycleCts != null ? lifecycleCts.Token : CancellationToken.None;
+            return CreateWorkThreadInternalAsync(title, prompt, token);
+        }
+
+        private async Task<string> CreateWorkThreadInternalAsync(string title, string prompt, CancellationToken token)
+        {
+            if (!IsConnected)
+            {
+                throw new InvalidOperationException("Codex app-server is not connected.");
+            }
+
+            string safeTitle = string.IsNullOrWhiteSpace(title) ? "Underwater work item" : title.Trim();
+            SetStatus("acting", $"Creating task '{safeTitle}'");
+
+            Dictionary<string, object> response = await SendRequestAsync(
+                "thread/start",
+                new Dictionary<string, object>
+                {
+                    ["serviceName"] = "underwater_work_thread",
+                    ["baseInstructions"] =
+                        "You are a Codex work thread spawned from the Underwater reef. " +
+                        "Stay focused on the task that created this thread. " +
+                        "Use the current workspace when relevant.",
+                    ["experimentalRawEvents"] = false,
+                    ["persistExtendedHistory"] = true
+                },
+                token);
+
+            string createdThreadId = ReadString(response, "result", "thread", "id") ?? Guid.NewGuid().ToString();
+            string initialPrompt = string.IsNullOrWhiteSpace(prompt) ? safeTitle : prompt.Trim();
+
+            if (!string.IsNullOrWhiteSpace(initialPrompt))
+            {
+                await SendRequestAsync(
+                    "turn/start",
+                    new Dictionary<string, object>
+                    {
+                        ["threadId"] = createdThreadId,
+                        ["input"] = new List<object>
+                        {
+                            new Dictionary<string, object>
+                            {
+                                ["type"] = "text",
+                                ["text"] = initialPrompt,
+                                ["text_elements"] = new List<object>()
+                            }
+                        }
+                    },
+                    token);
+            }
+
+            EnqueueMainThread(() =>
+            {
+                pendingWorldThreads[createdThreadId] = new PendingWorldThread
+                {
+                    id = createdThreadId,
+                    title = safeTitle,
+                    createdAtUtc = DateTime.UtcNow.ToString("o"),
+                    source = "spawned"
+                };
+
+                SetStatus("ready", $"Created task '{safeTitle}'");
+                RefreshWorldFromCodexState();
+            });
+
+            return createdThreadId;
         }
 
         private async Task RunConnectionLoopAsync(CancellationToken token)
@@ -158,21 +232,17 @@ namespace Underwater
 
                 try
                 {
-                    sessionId = Guid.NewGuid().ToString("N");
                     EnqueueStatus("connecting", $"Connecting to Codex app-server at {codexServerUrl}");
-                    Debug.Log($"[AquariumDirectorBridge] Connecting to {codexServerUrl}");
                     await localSocket.ConnectAsync(new Uri(codexServerUrl), token);
                     socket = localSocket;
                     EnqueueMainThread(() =>
                     {
                         appServerSocketOpen = true;
-                        SetStatus("socket-open", "Codex app-server socket open");
-                        Debug.Log("[AquariumDirectorBridge] WebSocket connected to Codex app-server.");
+                        SetStatus("connecting", "Codex app-server socket open");
                     });
 
                     Task receiveTask = ReceiveLoopAsync(localSocket, token);
-                    await InitializeCodexSessionAsync(token);
-                    nextSnapshotAt = 0f;
+                    await InitializeAppServerAsync(token);
                     await receiveTask;
                 }
                 catch (OperationCanceledException)
@@ -183,9 +253,8 @@ namespace Underwater
                 {
                     EnqueueMainThread(() =>
                     {
+                        appServerSocketOpen = false;
                         codexConnected = false;
-                        threadReady = false;
-                        turnInFlight = false;
                         SetStatus("reconnecting", $"Codex reconnect pending: {ex.Message}");
                         Debug.LogError($"[AquariumDirectorBridge] Connection loop failure: {ex}");
                     });
@@ -203,10 +272,6 @@ namespace Underwater
                     {
                         appServerSocketOpen = false;
                         codexConnected = false;
-                        threadReady = false;
-                        turnInFlight = false;
-                        threadId = "-";
-                        turnId = "-";
                     });
                 }
 
@@ -223,10 +288,10 @@ namespace Underwater
                 }
             }
 
-            EnqueueStatus("offline", "Codex director offline");
+            EnqueueStatus("offline", "Thread mirror offline");
         }
 
-        private async Task InitializeCodexSessionAsync(CancellationToken token)
+        private async Task InitializeAppServerAsync(CancellationToken token)
         {
             Dictionary<string, object> initializeResponse = await SendRequestAsync(
                 "initialize",
@@ -246,32 +311,248 @@ namespace Underwater
                 token);
 
             string platformFamily = ReadString(initializeResponse, "result", "platformFamily");
-            EnqueueStatus("initializing", $"Codex initialized on {platformFamily ?? "unknown-platform"}");
-            Debug.Log($"[AquariumDirectorBridge] initialize succeeded on {platformFamily ?? "unknown-platform"}.");
             await SendNotificationAsync("initialized", null, token);
-            Debug.Log("[AquariumDirectorBridge] initialized notification sent.");
 
-            Dictionary<string, object> threadResponse = await SendRequestAsync(
-                "thread/start",
-                new Dictionary<string, object>
-                {
-                    ["serviceName"] = "aquarium_director",
-                    ["baseInstructions"] = BuildDirectorInstructions(),
-                    ["dynamicTools"] = BuildDynamicTools(),
-                    ["experimentalRawEvents"] = false,
-                    ["persistExtendedHistory"] = false
-                },
-                token);
-
-            string createdThreadId = ReadString(threadResponse, "result", "thread", "id") ?? "-";
             EnqueueMainThread(() =>
             {
-                threadId = createdThreadId;
                 codexConnected = true;
-                threadReady = true;
-                SetStatus("connected", $"Aquarium director thread ready ({threadId})");
-                Debug.Log($"[AquariumDirectorBridge] thread/start succeeded. Thread id: {threadId}");
+                SetStatus("connected", $"Codex app-server ready on {platformFamily ?? "unknown-platform"}");
             });
+        }
+
+        private void RefreshWorldFromCodexState()
+        {
+            if (director == null)
+            {
+                return;
+            }
+
+            try
+            {
+                Dictionary<string, SessionIndexRecord> indexedThreads = ReadSessionIndex();
+                HashSet<string> liveSessionIds = ReadSessionIdsFromDirectory(sessionsRootPath);
+                HashSet<string> archivedSessionIds = ReadSessionIdsFromDirectory(archivedSessionsRootPath);
+                List<AquariumThreadSnapshot> liveThreads = new List<AquariumThreadSnapshot>();
+                List<AquariumArchivedRollSnapshot> rolls = new List<AquariumArchivedRollSnapshot>();
+                List<string> resolvedPendingIds = new List<string>();
+
+                foreach (KeyValuePair<string, PendingWorldThread> pair in pendingWorldThreads)
+                {
+                    if (liveSessionIds.Contains(pair.Key) || archivedSessionIds.Contains(pair.Key))
+                    {
+                        resolvedPendingIds.Add(pair.Key);
+                    }
+                }
+
+                for (int i = 0; i < resolvedPendingIds.Count; i++)
+                {
+                    pendingWorldThreads.Remove(resolvedPendingIds[i]);
+                }
+
+                foreach (string id in liveSessionIds)
+                {
+                    if (archivedSessionIds.Contains(id))
+                    {
+                        continue;
+                    }
+
+                    SessionIndexRecord record = indexedThreads.TryGetValue(id, out SessionIndexRecord indexed)
+                        ? indexed
+                        : SessionIndexRecord.CreateFallback(id, "Active thread", DateTime.UtcNow.ToString("o"));
+                    liveThreads.Add(CreateThreadSnapshot(record, "filesystem"));
+                }
+
+                foreach (KeyValuePair<string, PendingWorldThread> pair in pendingWorldThreads)
+                {
+                    if (!liveSessionIds.Contains(pair.Key))
+                    {
+                        DateTime createdAt = DateTime.UtcNow;
+
+                        if (!string.IsNullOrWhiteSpace(pair.Value.createdAtUtc))
+                        {
+                            DateTime.TryParse(pair.Value.createdAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out createdAt);
+                        }
+
+                        liveThreads.Add(new AquariumThreadSnapshot
+                        {
+                            id = pair.Value.id,
+                            title = pair.Value.title,
+                            phase = "fresh",
+                            source = pair.Value.source,
+                            ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - createdAt).TotalMinutes)
+                        });
+                    }
+                }
+
+                foreach (string id in archivedSessionIds)
+                {
+                    if (indexedThreads.TryGetValue(id, out SessionIndexRecord record))
+                    {
+                        rolls.Add(new AquariumArchivedRollSnapshot
+                        {
+                            id = record.id,
+                            title = record.title
+                        });
+                    }
+                    else
+                    {
+                        rolls.Add(new AquariumArchivedRollSnapshot
+                        {
+                            id = id,
+                            title = "Archived thread"
+                        });
+                    }
+                }
+
+                liveThreads.Sort((left, right) =>
+                {
+                    int ageComparison = left.ageMinutes.CompareTo(right.ageMinutes);
+
+                    if (ageComparison != 0)
+                    {
+                        return ageComparison;
+                    }
+
+                    return string.CompareOrdinal(left.title, right.title);
+                });
+                rolls.Sort((left, right) => string.CompareOrdinal(left.title, right.title));
+
+                string connectionLabel = IsConnected ? "Websocket connected." : "Websocket offline.";
+                string detail = $"{connectionLabel} Mirroring {liveThreads.Count} active threads and {rolls.Count} archived rolls.";
+                director.SyncThreadWorld(liveThreads, rolls, detail);
+                director.UpdateBridgeState(codexConnected ? "ready" : "offline", detail);
+            }
+            catch (Exception ex)
+            {
+                director.UpdateBridgeState("warning", $"Thread mirror failed: {ex.Message}");
+                Debug.LogError($"[AquariumDirectorBridge] Thread mirror failed: {ex}");
+            }
+        }
+
+        private AquariumThreadSnapshot CreateThreadSnapshot(SessionIndexRecord record, string source)
+        {
+            DateTime updatedAt = DateTime.UtcNow;
+
+            if (!string.IsNullOrWhiteSpace(record.updatedAtUtc))
+            {
+                DateTime.TryParse(record.updatedAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out updatedAt);
+            }
+
+            float ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - updatedAt).TotalMinutes);
+
+            return new AquariumThreadSnapshot
+            {
+                id = record.id,
+                title = string.IsNullOrWhiteSpace(record.title) ? "Untitled thread" : record.title,
+                phase = DetermineThreadPhase(ageMinutes),
+                source = source,
+                ageMinutes = ageMinutes
+            };
+        }
+
+        private static string DetermineThreadPhase(float ageMinutes)
+        {
+            if (ageMinutes <= 2f)
+            {
+                return "fresh";
+            }
+
+            if (ageMinutes <= 12f)
+            {
+                return "responding";
+            }
+
+            if (ageMinutes <= 45f)
+            {
+                return "working";
+            }
+
+            return "idle";
+        }
+
+        private Dictionary<string, SessionIndexRecord> ReadSessionIndex()
+        {
+            Dictionary<string, SessionIndexRecord> records = new Dictionary<string, SessionIndexRecord>();
+
+            if (string.IsNullOrWhiteSpace(sessionIndexPath) || !File.Exists(sessionIndexPath))
+            {
+                return records;
+            }
+
+            string[] lines = File.ReadAllLines(sessionIndexPath);
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                SessionIndexEntry entry;
+
+                try
+                {
+                    entry = JsonUtility.FromJson<SessionIndexEntry>(line);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (entry == null || string.IsNullOrWhiteSpace(entry.id))
+                {
+                    continue;
+                }
+
+                records[entry.id] = new SessionIndexRecord
+                {
+                    id = entry.id,
+                    title = string.IsNullOrWhiteSpace(entry.thread_name) ? "Untitled thread" : entry.thread_name,
+                    updatedAtUtc = string.IsNullOrWhiteSpace(entry.updated_at) ? DateTime.UtcNow.ToString("o") : entry.updated_at
+                };
+            }
+
+            return records;
+        }
+
+        private HashSet<string> ReadSessionIdsFromDirectory(string rootPath)
+        {
+            HashSet<string> ids = new HashSet<string>();
+
+            if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
+            {
+                return ids;
+            }
+
+            string[] files = Directory.GetFiles(rootPath, "*.jsonl", SearchOption.AllDirectories);
+
+            for (int i = 0; i < files.Length; i++)
+            {
+                string id = ExtractThreadIdFromPath(files[i]);
+
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    ids.Add(id);
+                }
+            }
+
+            return ids;
+        }
+
+        private static string ExtractThreadIdFromPath(string path)
+        {
+            string filename = Path.GetFileNameWithoutExtension(path);
+
+            if (string.IsNullOrWhiteSpace(filename) || filename.Length < 36)
+            {
+                return string.Empty;
+            }
+
+            string maybeId = filename.Substring(filename.Length - 36);
+            Guid parsed;
+            return Guid.TryParse(maybeId, out parsed) ? maybeId : string.Empty;
         }
 
         private async Task ReceiveLoopAsync(ClientWebSocket localSocket, CancellationToken token)
@@ -304,12 +585,10 @@ namespace Underwater
 
                 string json = Encoding.UTF8.GetString(messageStream.ToArray());
 
-                if (string.IsNullOrWhiteSpace(json))
+                if (!string.IsNullOrWhiteSpace(json))
                 {
-                    continue;
+                    HandleIncomingMessage(json);
                 }
-
-                HandleIncomingMessage(json);
             }
         }
 
@@ -336,13 +615,13 @@ namespace Underwater
 
             string method = root["method"] as string;
 
-            if (hasId)
+            if (string.Equals(method, "error", StringComparison.Ordinal))
             {
-                HandleServerRequest(root, method);
-                return;
+                Dictionary<string, object> parameters = root.ContainsKey("params")
+                    ? root["params"] as Dictionary<string, object>
+                    : null;
+                EnqueueMainThread(() => SetStatus("warning", ReadString(parameters, "message") ?? "Codex app-server error"));
             }
-
-            HandleNotification(root, method);
         }
 
         private void ResolvePendingResponse(Dictionary<string, object> root)
@@ -362,196 +641,6 @@ namespace Underwater
             }
 
             responseSource.TrySetResult(root);
-        }
-
-        private void HandleServerRequest(Dictionary<string, object> root, string method)
-        {
-            int serverRequestId = Convert.ToInt32(root["id"], CultureInfo.InvariantCulture);
-
-            if (method != "item/tool/call")
-            {
-                _ = SendJsonAsync(
-                    MiniJson.Serialize(
-                        new Dictionary<string, object>
-                        {
-                            ["id"] = serverRequestId,
-                            ["error"] = new Dictionary<string, object>
-                            {
-                                ["code"] = -32601,
-                                ["message"] = $"Unsupported server request: {method}"
-                            }
-                        }),
-                    lifecycleCts != null ? lifecycleCts.Token : CancellationToken.None);
-                return;
-            }
-
-            Dictionary<string, object> parameters = root["params"] as Dictionary<string, object>;
-
-            if (parameters == null)
-            {
-                return;
-            }
-
-            string tool = parameters.ContainsKey("tool") ? parameters["tool"] as string : string.Empty;
-            string callId = parameters.ContainsKey("callId") ? parameters["callId"] as string : "-";
-            object arguments = parameters.ContainsKey("arguments") ? parameters["arguments"] : null;
-            EnqueueMainThread(() => HandleToolCallOnMainThread(serverRequestId, tool, callId, arguments));
-        }
-
-        private void HandleNotification(Dictionary<string, object> root, string method)
-        {
-            Dictionary<string, object> parameters = root.ContainsKey("params")
-                ? root["params"] as Dictionary<string, object>
-                : null;
-
-            switch (method)
-            {
-                case "turn/started":
-                    EnqueueMainThread(() =>
-                    {
-                        turnInFlight = true;
-                        turnId = ReadString(parameters, "turn", "id") ?? turnId;
-                        SetStatus("thinking", $"Codex is reviewing snapshot #{lastSnapshotSequence}");
-                        Debug.Log($"[AquariumDirectorBridge] turn started: {turnId}");
-                    });
-                    break;
-                case "turn/completed":
-                    EnqueueMainThread(() =>
-                    {
-                        turnId = ReadString(parameters, "turn", "id") ?? turnId;
-                        turnInFlight = false;
-                        SetStatus("ready", string.IsNullOrWhiteSpace(lastCodexText) ? "Turn completed" : lastCodexText);
-                        Debug.Log($"[AquariumDirectorBridge] turn completed: {turnId}");
-
-                        if (queuedSnapshot != null)
-                        {
-                            AquariumDirectorSnapshot pendingSnapshot = queuedSnapshot;
-                            queuedSnapshot = null;
-                            _ = StartTurnFromSnapshotAsync(pendingSnapshot, lifecycleCts != null ? lifecycleCts.Token : CancellationToken.None);
-                        }
-                    });
-                    break;
-                case "item/agentMessage/delta":
-                    EnqueueMainThread(() =>
-                    {
-                        string delta = ReadString(parameters, "delta");
-
-                        if (!string.IsNullOrWhiteSpace(delta))
-                        {
-                            SetStatus("responding", delta);
-                        }
-                    });
-                    break;
-                case "error":
-                    EnqueueMainThread(() =>
-                    {
-                        SetStatus("error", ReadString(parameters, "message") ?? "Codex app-server error");
-                    });
-                    break;
-            }
-        }
-
-        private void HandleToolCallOnMainThread(int serverRequestId, string tool, string callId, object arguments)
-        {
-            lastTool = string.IsNullOrWhiteSpace(tool) ? "-" : tool;
-            lastActionId = string.IsNullOrWhiteSpace(callId) ? "-" : callId;
-            Debug.Log($"[AquariumDirectorBridge] tool call received: {tool} ({callId})");
-
-            switch (tool)
-            {
-                case "get_world_state":
-                {
-                    AquariumDirectorSnapshot snapshot = director.CreateSnapshot();
-                    string snapshotJson = JsonUtility.ToJson(snapshot, true);
-                    SetStatus("acting", "Codex requested the latest world state");
-                    _ = SendToolResponseAsync(serverRequestId, true, snapshotJson, lifecycleCts != null ? lifecycleCts.Token : CancellationToken.None);
-                    break;
-                }
-                case "command_lobsters":
-                case "command_sharks":
-                {
-                    AquariumDirectorAction action = ParseAction(arguments);
-                    action.actionId = callId;
-                    action.species = tool == "command_lobsters" ? "lobsters" : "sharks";
-
-                    AquariumDirectorActionResult result = director.ApplyDirectorAction(action);
-                    lastActionSummary = result.message ?? "Action applied";
-                    SetStatus(result.success ? "acting" : "warning", lastActionSummary);
-                    _ = SendToolResponseAsync(serverRequestId, result.success, result.message ?? "No result message", lifecycleCts != null ? lifecycleCts.Token : CancellationToken.None);
-                    break;
-                }
-                default:
-                    SetStatus("warning", $"Unknown dynamic tool: {tool}");
-                    _ = SendToolResponseAsync(serverRequestId, false, $"Unknown dynamic tool: {tool}", lifecycleCts != null ? lifecycleCts.Token : CancellationToken.None);
-                    break;
-            }
-        }
-
-        private AquariumDirectorAction ParseAction(object arguments)
-        {
-            Dictionary<string, object> data = arguments as Dictionary<string, object>;
-            AquariumDirectorAction action = new AquariumDirectorAction
-            {
-                scope = ReadString(data, "scope") ?? "all",
-                directive = ReadString(data, "directive") ?? "Autonomous",
-                count = ReadInt(data, "count"),
-                radius = ReadFloat(data, "radius", 4f),
-                durationSeconds = ReadFloat(data, "durationSeconds", 8f),
-                creatureIds = ReadStringArray(data, "creatureIds"),
-                target = ReadVector3(data, "target")
-            };
-
-            return action;
-        }
-
-        private async Task StartTurnFromSnapshotAsync(AquariumDirectorSnapshot snapshot, CancellationToken token)
-        {
-            if (!threadReady || director == null || snapshot == null)
-            {
-                return;
-            }
-
-            turnInFlight = true;
-            SetStatus("thinking", $"Sending world snapshot #{snapshot.sequence} to Codex");
-
-            try
-            {
-                Dictionary<string, object> response = await SendRequestAsync(
-                    "turn/start",
-                    new Dictionary<string, object>
-                    {
-                        ["threadId"] = threadId,
-                        ["input"] = new List<object>
-                        {
-                            new Dictionary<string, object>
-                            {
-                                ["type"] = "text",
-                                ["text"] = BuildTurnText(snapshot),
-                                ["text_elements"] = new List<object>()
-                            }
-                        }
-                    },
-                    token);
-
-                string createdTurnId = ReadString(response, "result", "turn", "id");
-                EnqueueMainThread(() =>
-                {
-                    turnId = string.IsNullOrWhiteSpace(createdTurnId) ? turnId : createdTurnId;
-                    lastSnapshotSequence = snapshot.sequence;
-                    lastSnapshotSentAtUtc = snapshot.capturedAtUtc ?? lastSnapshotSentAtUtc;
-                    queuedSnapshot = null;
-                    Debug.Log($"[AquariumDirectorBridge] turn/start sent for snapshot #{snapshot.sequence}, turn id: {turnId}");
-                });
-            }
-            catch (Exception ex)
-            {
-                EnqueueMainThread(() =>
-                {
-                    turnInFlight = false;
-                    SetStatus("error", $"turn/start failed: {ex.Message}");
-                    Debug.LogError($"[AquariumDirectorBridge] turn/start failed for snapshot #{snapshot.sequence}: {ex}");
-                });
-            }
         }
 
         private async Task<Dictionary<string, object>> SendRequestAsync(string method, Dictionary<string, object> parameters, CancellationToken token)
@@ -597,31 +686,6 @@ namespace Underwater
             return SendJsonAsync(MiniJson.Serialize(payload), token);
         }
 
-        private Task SendToolResponseAsync(int serverRequestId, bool success, string text, CancellationToken token)
-        {
-            string safeText = string.IsNullOrWhiteSpace(text) ? "No result text." : text;
-
-            return SendJsonAsync(
-                MiniJson.Serialize(
-                    new Dictionary<string, object>
-                    {
-                        ["id"] = serverRequestId,
-                        ["result"] = new Dictionary<string, object>
-                        {
-                            ["contentItems"] = new List<object>
-                            {
-                                new Dictionary<string, object>
-                                {
-                                    ["type"] = "inputText",
-                                    ["text"] = safeText
-                                }
-                            },
-                            ["success"] = success
-                        }
-                    }),
-                token);
-        }
-
         private async Task SendJsonAsync(string json, CancellationToken token)
         {
             if (string.IsNullOrWhiteSpace(json))
@@ -633,7 +697,7 @@ namespace Underwater
 
             if (localSocket == null || localSocket.State != WebSocketState.Open)
             {
-                return;
+                throw new InvalidOperationException("Codex app-server socket is not open.");
             }
 
             byte[] payload = Encoding.UTF8.GetBytes(json);
@@ -645,11 +709,6 @@ namespace Underwater
                 {
                     await localSocket.SendAsync(new ArraySegment<byte>(payload), WebSocketMessageType.Text, true, token);
                 }
-            }
-            catch (Exception ex)
-            {
-                Debug.LogError($"[AquariumDirectorBridge] SendJsonAsync failed: {ex}");
-                throw;
             }
             finally
             {
@@ -689,186 +748,32 @@ namespace Underwater
                 director.UpdateBridgeState(lastCodexPhase, lastCodexText);
             }
 
-            if (changed)
+            if (changed && ShouldLogStatus(lastCodexPhase))
             {
                 Debug.Log($"[AquariumDirectorBridge] Status -> {lastCodexPhase}: {lastCodexText}");
             }
         }
 
-        private string BuildTurnText(AquariumDirectorSnapshot snapshot)
+        private static bool ShouldLogStatus(string phase)
         {
-            return
-                $"World snapshot #{snapshot.sequence}\n" +
-                $"{snapshot.summary}\n\n" +
-                "You are live inside the aquarium. Inspect the state, use dynamic tools if action is needed, then briefly explain what you are doing.\n" +
-                "Latest state:\n" +
-                JsonUtility.ToJson(snapshot, true);
-        }
-
-        private List<object> BuildDynamicTools()
-        {
-            Dictionary<string, object> toolSchema = new Dictionary<string, object>
+            switch ((phase ?? string.Empty).Trim().ToLowerInvariant())
             {
-                ["type"] = "object",
-                ["properties"] = new Dictionary<string, object>
-                {
-                    ["directive"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new List<object>
-                        {
-                            "Autonomous",
-                            "MoveToPoint",
-                            "GuardZone",
-                            "PressurePlayer",
-                            "RetreatFromPlayer",
-                            "HoldPosition"
-                        }
-                    },
-                    ["scope"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new List<object> { "all", "nearest_to_player", "nearest_to_point", "ids" }
-                    },
-                    ["count"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "integer",
-                        ["minimum"] = 0
-                    },
-                    ["creatureIds"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "array",
-                        ["items"] = new Dictionary<string, object>
-                        {
-                            ["type"] = "string"
-                        }
-                    },
-                    ["target"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "object",
-                        ["properties"] = new Dictionary<string, object>
-                        {
-                            ["x"] = new Dictionary<string, object> { ["type"] = "number" },
-                            ["y"] = new Dictionary<string, object> { ["type"] = "number" },
-                            ["z"] = new Dictionary<string, object> { ["type"] = "number" }
-                        },
-                        ["required"] = new List<object> { "x", "y", "z" },
-                        ["additionalProperties"] = false
-                    },
-                    ["radius"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "number",
-                        ["minimum"] = 0
-                    },
-                    ["durationSeconds"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "number",
-                        ["minimum"] = 0
-                    }
-                },
-                ["required"] = new List<object> { "directive" },
-                ["additionalProperties"] = false
-            };
-
-            return new List<object>
-            {
-                new Dictionary<string, object>
-                {
-                    ["name"] = "command_lobsters",
-                    ["description"] = "Direct one or more lobsters with a high-level directive.",
-                    ["inputSchema"] = toolSchema
-                },
-                new Dictionary<string, object>
-                {
-                    ["name"] = "command_sharks",
-                    ["description"] = "Direct one or more sharks with a high-level directive.",
-                    ["inputSchema"] = toolSchema
-                },
-                new Dictionary<string, object>
-                {
-                    ["name"] = "get_world_state",
-                    ["description"] = "Return the latest aquarium snapshot and summary without changing the world.",
-                    ["inputSchema"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "object",
-                        ["properties"] = new Dictionary<string, object>(),
-                        ["additionalProperties"] = false
-                    }
-                }
-            };
-        }
-
-        private string BuildDirectorInstructions()
-        {
-            return
-                "You are the Aquarium Director for an underwater sandbox. " +
-                "Unity owns movement, animation, spawning, and simulation. " +
-                "You control behavior only through the dynamic tools on this thread. " +
-                "Keep decisions tactical and continuous. " +
-                "Prefer high-level directives like GuardZone, MoveToPoint, PressurePlayer, RetreatFromPlayer, HoldPosition, or Autonomous. " +
-                "When you act, explain your intent briefly.";
+                case "connecting":
+                case "connected":
+                case "acting":
+                case "warning":
+                case "error":
+                case "reconnecting":
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         private static string ReadString(Dictionary<string, object> root, params string[] path)
         {
             object value = Traverse(root, path);
             return value as string;
-        }
-
-        private static int ReadInt(Dictionary<string, object> root, string key)
-        {
-            object value = Traverse(root, key);
-
-            if (value == null)
-            {
-                return 0;
-            }
-
-            return Convert.ToInt32(value, CultureInfo.InvariantCulture);
-        }
-
-        private static float ReadFloat(Dictionary<string, object> root, string key, float defaultValue)
-        {
-            object value = Traverse(root, key);
-
-            if (value == null)
-            {
-                return defaultValue;
-            }
-
-            return Convert.ToSingle(value, CultureInfo.InvariantCulture);
-        }
-
-        private static string[] ReadStringArray(Dictionary<string, object> root, string key)
-        {
-            if (!(Traverse(root, key) is List<object> list))
-            {
-                return Array.Empty<string>();
-            }
-
-            string[] values = new string[list.Count];
-
-            for (int i = 0; i < list.Count; i++)
-            {
-                values[i] = list[i] as string ?? string.Empty;
-            }
-
-            return values;
-        }
-
-        private static SerializableVector3 ReadVector3(Dictionary<string, object> root, string key)
-        {
-            if (!(Traverse(root, key) is Dictionary<string, object> vector))
-            {
-                return null;
-            }
-
-            return new SerializableVector3
-            {
-                x = Convert.ToSingle(Traverse(vector, "x") ?? 0d, CultureInfo.InvariantCulture),
-                y = Convert.ToSingle(Traverse(vector, "y") ?? 0d, CultureInfo.InvariantCulture),
-                z = Convert.ToSingle(Traverse(vector, "z") ?? 0d, CultureInfo.InvariantCulture)
-            };
         }
 
         private static object Traverse(Dictionary<string, object> root, params string[] path)

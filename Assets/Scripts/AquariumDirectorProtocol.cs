@@ -4,26 +4,6 @@ using UnityEngine;
 namespace Underwater
 {
     [Serializable]
-    public sealed class AquariumBridgeEnvelope
-    {
-        public string type;
-        public string bridgeVersion;
-        public AquariumBridgeHello hello;
-        public AquariumDirectorSnapshot snapshot;
-        public AquariumDirectorAction action;
-        public AquariumDirectorActionResult actionResult;
-        public AquariumDirectorStatusUpdate status;
-    }
-
-    [Serializable]
-    public sealed class AquariumBridgeHello
-    {
-        public string source;
-        public string worldName;
-        public string sessionId;
-    }
-
-    [Serializable]
     public sealed class AquariumDirectorSnapshot
     {
         public int sequence;
@@ -31,15 +11,15 @@ namespace Underwater
         public string summary;
         public AquariumDirectorMetrics metrics;
         public AquariumPlayerSnapshot player;
-        public AquariumCreatureSnapshot[] sharks;
-        public AquariumCreatureSnapshot[] lobsters;
+        public AquariumThreadSnapshot[] threads;
+        public AquariumArchivedRollSnapshot[] archivedRolls;
     }
 
     [Serializable]
     public sealed class AquariumDirectorMetrics
     {
-        public int sharkCount;
-        public int lobsterCount;
+        public int activeThreads;
+        public int archivedRolls;
         public string bridgeState;
     }
 
@@ -53,27 +33,30 @@ namespace Underwater
     }
 
     [Serializable]
-    public sealed class AquariumCreatureSnapshot
+    public sealed class AquariumThreadSnapshot
     {
         public string id;
-        public string kind;
-        public string directive;
+        public string title;
+        public string phase;
+        public string source;
+        public float ageMinutes;
         public SerializableVector3 position;
         public SerializableVector3 velocity;
     }
 
     [Serializable]
-    public sealed class AquariumDirectorAction
+    public sealed class AquariumArchivedRollSnapshot
     {
-        public string actionId;
-        public string species;
-        public string directive;
-        public string scope;
-        public string[] creatureIds;
-        public int count;
-        public SerializableVector3 target;
-        public float radius;
-        public float durationSeconds;
+        public string id;
+        public string title;
+        public SerializableVector3 position;
+    }
+
+    [Serializable]
+    public sealed class AquariumSpawnThreadCommand
+    {
+        public string title;
+        public string prompt;
     }
 
     [Serializable]
@@ -82,21 +65,7 @@ namespace Underwater
         public string actionId;
         public bool success;
         public string message;
-        public string[] affectedCreatureIds;
-    }
-
-    [Serializable]
-    public sealed class AquariumDirectorStatusUpdate
-    {
-        public string phase;
-        public string text;
-        public bool unityConnected;
-        public bool codexConnected;
-        public string threadId;
-        public string turnId;
-        public int lastSnapshotSequence;
-        public string lastTool;
-        public string lastActionId;
+        public string[] affectedIds;
     }
 
     [Serializable]
