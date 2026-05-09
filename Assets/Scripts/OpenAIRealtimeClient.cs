@@ -19,13 +19,16 @@ namespace Underwater
         private readonly string apiKey;
         private readonly string model;
         private readonly SemaphoreSlim socketLock = new SemaphoreSlim(1, 1);
+        private NiaApiClient niaClient;
         private ClientWebSocket answerSocket;
         private string answerSessionVoice;
+        private string answerSessionNiaConfigurationKey;
 
-        public OpenAIRealtimeClient(string apiKey, string model)
+        public OpenAIRealtimeClient(string apiKey, string model, NiaApiClient niaClient)
         {
             this.apiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim();
             this.model = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
+            this.niaClient = niaClient;
         }
 
         public bool HasApiKey => !string.IsNullOrWhiteSpace(ReadApiKey());
@@ -36,6 +39,11 @@ namespace Underwater
             string normalizedModel = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
             return string.Equals(this.apiKey, normalizedApiKey, StringComparison.Ordinal)
                 && string.Equals(this.model, normalizedModel, StringComparison.Ordinal);
+        }
+
+        public void SetNiaClient(NiaApiClient niaClient)
+        {
+            this.niaClient = niaClient;
         }
 
         public async Task WarmUpAnswerSessionAsync(string voice, CancellationToken token)
@@ -120,7 +128,7 @@ namespace Underwater
                         await SendJsonAsync(answerSocket, new Dictionary<string, object> { ["type"] = "input_audio_buffer.commit" }, requestToken);
                         await SendJsonAsync(answerSocket, BuildAnswerResponseCreate(safeInstructions), requestToken);
 
-                        response = await ReadAudioResponseAsync(answerSocket, requestToken);
+                        response = await ReadAudioResponseAsync(answerSocket, safeInstructions, requestToken);
                         break;
                     }
                     catch (Exception ex) when (attempt == 0 && IsRecoverableRealtimeSocketException(ex))
@@ -274,7 +282,7 @@ namespace Underwater
             await WaitForEventTypeAsync(socket, "session.updated", requestToken);
             await SendJsonAsync(socket, BuildSpeechResponseCreate(text.Trim()), requestToken);
 
-            RealtimeAudioResult response = await ReadAudioResponseAsync(socket, requestToken);
+            RealtimeAudioResult response = await ReadAudioResponseAsync(socket, null, requestToken);
 
             if (socket.State == WebSocketState.Open)
             {
@@ -318,9 +326,12 @@ namespace Underwater
 
         private async Task EnsureAnswerSessionAsync(string apiKey, string voice, CancellationToken token)
         {
+            string currentNiaConfigurationKey = CurrentNiaConfigurationKey();
+
             if (answerSocket != null
                 && answerSocket.State == WebSocketState.Open
-                && string.Equals(answerSessionVoice, voice, StringComparison.Ordinal))
+                && string.Equals(answerSessionVoice, voice, StringComparison.Ordinal)
+                && string.Equals(answerSessionNiaConfigurationKey, currentNiaConfigurationKey, StringComparison.Ordinal))
             {
                 return;
             }
@@ -338,6 +349,7 @@ namespace Underwater
             await WaitForEventTypeAsync(answerSocket, "session.updated", token);
 
             answerSessionVoice = voice;
+            answerSessionNiaConfigurationKey = currentNiaConfigurationKey;
         }
 
         private async Task CloseAnswerSessionAsync(string reason)
@@ -345,6 +357,7 @@ namespace Underwater
             ClientWebSocket socket = answerSocket;
             answerSocket = null;
             answerSessionVoice = null;
+            answerSessionNiaConfigurationKey = null;
 
             if (socket == null)
             {
@@ -369,36 +382,88 @@ namespace Underwater
 
         private Dictionary<string, object> BuildAnswerSessionUpdate(string voice)
         {
+            Dictionary<string, object> session = new Dictionary<string, object>
+            {
+                ["type"] = "realtime",
+                ["model"] = model,
+                ["output_modalities"] = new List<object> { "audio" },
+                ["audio"] = new Dictionary<string, object>
+                {
+                    ["input"] = new Dictionary<string, object>
+                    {
+                        ["format"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "audio/pcm",
+                            ["rate"] = RealtimeInputSampleRate
+                        },
+                        ["turn_detection"] = null
+                    },
+                    ["output"] = new Dictionary<string, object>
+                    {
+                        ["format"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "audio/pcm",
+                            ["rate"] = RealtimeOutputSampleRate
+                        },
+                        ["voice"] = voice
+                    }
+                },
+                ["instructions"] = BuildAnswerSessionInstructions()
+            };
+
+            if (CanUseNiaSearch())
+            {
+                session["tools"] = BuildNiaSearchTools();
+                session["tool_choice"] = "auto";
+            }
+
             return new Dictionary<string, object>
             {
                 ["type"] = "session.update",
-                ["session"] = new Dictionary<string, object>
+                ["session"] = session
+            };
+        }
+
+        private string BuildAnswerSessionInstructions()
+        {
+            string instructions = "Answer short push-to-talk voice questions for the Unity game Underwater.";
+
+            if (CanUseNiaSearch())
+            {
+                instructions += " Route questions about Codex threads, pets, archived pets, nearby/facing things, reef state, local app-server state, or the current Underwater world to the provided game context only. Never call nia_search for those local thread or pet questions. For all other external knowledge, current information, technical docs, code, libraries, research, or anything that benefits from search, call nia_search before answering.";
+            }
+
+            return instructions;
+        }
+
+        private static List<object> BuildNiaSearchTools()
+        {
+            return new List<object>
+            {
+                new Dictionary<string, object>
                 {
-                    ["type"] = "realtime",
-                    ["model"] = model,
-                    ["output_modalities"] = new List<object> { "audio" },
-                    ["audio"] = new Dictionary<string, object>
+                    ["type"] = "function",
+                    ["name"] = "nia_search",
+                    ["description"] = "Search Nia for external knowledge only. Do not use for local Underwater/Codex app-server questions about threads, pets, archived pets, nearby/facing objects, reef state, or current game context. Use universal for Nia's pre-indexed repositories, docs, and papers; web for current web information; query for configured Nia workspace sources; deep for multi-step research.",
+                    ["parameters"] = new Dictionary<string, object>
                     {
-                        ["input"] = new Dictionary<string, object>
+                        ["type"] = "object",
+                        ["properties"] = new Dictionary<string, object>
                         {
-                            ["format"] = new Dictionary<string, object>
+                            ["query"] = new Dictionary<string, object>
                             {
-                                ["type"] = "audio/pcm",
-                                ["rate"] = RealtimeInputSampleRate
+                                ["type"] = "string",
+                                ["description"] = "A concise natural-language search query."
                             },
-                            ["turn_detection"] = null
+                            ["mode"] = new Dictionary<string, object>
+                            {
+                                ["type"] = "string",
+                                ["enum"] = new List<object> { "universal", "web", "query", "deep" },
+                                ["description"] = "Search mode. Prefer universal unless the user specifically needs live web/current information, configured workspace sources, or deep research."
+                            }
                         },
-                        ["output"] = new Dictionary<string, object>
-                        {
-                            ["format"] = new Dictionary<string, object>
-                            {
-                                ["type"] = "audio/pcm",
-                                ["rate"] = RealtimeOutputSampleRate
-                            },
-                            ["voice"] = voice
-                        }
-                    },
-                    ["instructions"] = "Answer short push-to-talk voice questions for the Unity game Underwater."
+                        ["required"] = new List<object> { "query" }
+                    }
                 }
             };
         }
@@ -493,11 +558,12 @@ namespace Underwater
             };
         }
 
-        private static async Task<RealtimeAudioResult> ReadAudioResponseAsync(ClientWebSocket socket, CancellationToken token)
+        private async Task<RealtimeAudioResult> ReadAudioResponseAsync(ClientWebSocket socket, string followUpInstructions, CancellationToken token)
         {
             using MemoryStream audioBytes = new MemoryStream();
             StringBuilder transcript = new StringBuilder();
             StringBuilder text = new StringBuilder();
+            int toolCallRounds = 0;
 
             while (socket.State == WebSocketState.Open)
             {
@@ -563,6 +629,36 @@ namespace Underwater
 
                 if (string.Equals(type, "response.done", StringComparison.Ordinal))
                 {
+                    List<RealtimeFunctionCall> functionCalls = ExtractFunctionCalls(message);
+
+                    if (functionCalls.Count > 0)
+                    {
+                        if (toolCallRounds >= 2)
+                        {
+                            throw new InvalidOperationException("OpenAI Realtime requested too many consecutive tool calls.");
+                        }
+
+                        toolCallRounds++;
+
+                        for (int i = 0; i < functionCalls.Count; i++)
+                        {
+                            string output = await ExecuteFunctionCallAsync(functionCalls[i], token);
+                            await SendJsonAsync(socket, BuildFunctionCallOutput(functionCalls[i].CallId, output), token);
+                        }
+
+                        audioBytes.SetLength(0);
+                        transcript.Clear();
+                        text.Clear();
+                        await SendJsonAsync(
+                            socket,
+                            BuildAnswerResponseCreate(
+                                string.IsNullOrWhiteSpace(followUpInstructions)
+                                    ? "Use the tool result to answer the user clearly and briefly."
+                                    : followUpInstructions),
+                            token);
+                        continue;
+                    }
+
                     byte[] pcmBytes = audioBytes.ToArray();
                     return new RealtimeAudioResult
                     {
@@ -576,6 +672,70 @@ namespace Underwater
             }
 
             throw new InvalidOperationException("OpenAI Realtime socket closed before returning audio.");
+        }
+
+        private async Task<string> ExecuteFunctionCallAsync(RealtimeFunctionCall functionCall, CancellationToken token)
+        {
+            if (functionCall == null || !string.Equals(functionCall.Name, "nia_search", StringComparison.Ordinal))
+            {
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = "Unsupported realtime tool call."
+                });
+            }
+
+            if (!CanUseNiaSearch())
+            {
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = $"Set niaApiKey in {UnderwaterUserSettings.RelativePath} to enable Nia search."
+                });
+            }
+
+            Dictionary<string, object> arguments = AquariumDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>;
+            string query = ReadString(arguments, "query") ?? ReadString(arguments, "question");
+            string mode = ReadString(arguments, "mode");
+
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = "Nia search requires a non-empty query."
+                });
+            }
+
+            try
+            {
+                NiaSearchResult result = await niaClient.QueryAsync(query, mode, token);
+                Dictionary<string, object> output = new Dictionary<string, object>
+                {
+                    ["answer"] = result.Answer ?? string.Empty,
+                    ["sources"] = ToObjectList(result.SourceLabels)
+                };
+                return AquariumDirectorBridge.MiniJson.Serialize(output);
+            }
+            catch (Exception ex)
+            {
+                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = Shorten(message, 400)
+                });
+            }
+        }
+
+        private static Dictionary<string, object> BuildFunctionCallOutput(string callId, string output)
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = "conversation.item.create",
+                ["item"] = new Dictionary<string, object>
+                {
+                    ["type"] = "function_call_output",
+                    ["call_id"] = callId,
+                    ["output"] = string.IsNullOrWhiteSpace(output) ? "{}" : output
+                }
+            };
         }
 
         private static bool IsRecoverableRealtimeSocketException(Exception ex)
@@ -592,6 +752,76 @@ namespace Underwater
             }
 
             return false;
+        }
+
+        private bool CanUseNiaSearch()
+        {
+            return niaClient != null && niaClient.HasApiKey;
+        }
+
+        private string CurrentNiaConfigurationKey()
+        {
+            return CanUseNiaSearch() ? niaClient.ConfigurationKey : string.Empty;
+        }
+
+        private static List<object> ToObjectList(string[] values)
+        {
+            List<object> list = new List<object>();
+
+            if (values == null)
+            {
+                return list;
+            }
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (!string.IsNullOrWhiteSpace(values[i]))
+                {
+                    list.Add(values[i]);
+                }
+            }
+
+            return list;
+        }
+
+        private static List<RealtimeFunctionCall> ExtractFunctionCalls(Dictionary<string, object> message)
+        {
+            List<RealtimeFunctionCall> functionCalls = new List<RealtimeFunctionCall>();
+            object output = Traverse(message, "response", "output");
+
+            if (!(output is List<object> items))
+            {
+                return functionCalls;
+            }
+
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (!(items[i] is Dictionary<string, object> item))
+                {
+                    continue;
+                }
+
+                if (!string.Equals(ReadString(item, "type"), "function_call", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string name = ReadString(item, "name");
+                string callId = ReadString(item, "call_id");
+                string arguments = ReadString(item, "arguments") ?? "{}";
+
+                if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(callId))
+                {
+                    functionCalls.Add(new RealtimeFunctionCall
+                    {
+                        Name = name,
+                        CallId = callId,
+                        Arguments = arguments
+                    });
+                }
+            }
+
+            return functionCalls;
         }
 
         private static async Task<string> ReadResponseTextAsync(ClientWebSocket socket, CancellationToken token)
@@ -853,6 +1083,17 @@ namespace Underwater
             return cleaned;
         }
 
+        private static string Shorten(string text, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = text.Trim();
+            return trimmed.Length <= maxLength ? trimmed : trimmed.Substring(0, Math.Max(0, maxLength - 3)).TrimEnd() + "...";
+        }
+
         private string ReadApiKey()
         {
             return apiKey;
@@ -864,5 +1105,12 @@ namespace Underwater
         public float[] Samples;
         public int SampleRate;
         public string Transcript;
+    }
+
+    internal sealed class RealtimeFunctionCall
+    {
+        public string Name;
+        public string CallId;
+        public string Arguments;
     }
 }
