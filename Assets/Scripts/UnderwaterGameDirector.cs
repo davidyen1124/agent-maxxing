@@ -1,6 +1,8 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
@@ -17,16 +19,35 @@ namespace Underwater
         private GUIStyle threadTagStyle;
         private GUIStyle speechBubbleStyle;
         private GUIStyle speechBubbleShadowStyle;
+        private GUIStyle loadingTitleStyle;
+        private GUIStyle loadingStatusStyle;
 
         private Material reefMaterial;
         private Material kelpMaterial;
         private Material surfaceMaterial;
         private AquariumDirectorBridge aquariumBridge;
+        private CodexPetCatalog petCatalog;
+        private Coroutine worldSyncRoutine;
+        private QueuedWorldSync queuedWorldSync;
         private int snapshotSequence;
         private string bridgeState = "offline";
         private string directorStatusLine = "Scanning Codex threads";
         private string nearestThreadTitle = "No active threads";
         private string nearestThreadPhase = "idle";
+        private bool startupLoading;
+        private bool workThreadSpawnInFlight;
+        private int spawnedWorkThreadCount;
+        private string workThreadStatusLine = "Codex work thread spawner ready";
+        private bool worldSyncLoading;
+        private float worldSyncProgress;
+        private string worldSyncStatus = "Loading thread pets";
+
+        private sealed class QueuedWorldSync
+        {
+            public List<AquariumThreadSnapshot> threads;
+            public List<AquariumArchivedPetSnapshot> archivedPets;
+            public string detail;
+        }
 
         public static UnderwaterGameDirector Instance { get; private set; }
 
@@ -59,7 +80,8 @@ namespace Underwater
             ConfigurePostProcessing();
             BuildArena();
             CreatePlayer();
-            AttachAquariumBridge();
+            AttachAquariumBridge(false);
+            StartCoroutine(LoadCodexPetsThenAttachBridge());
         }
 
         private void Update()
@@ -83,21 +105,69 @@ namespace Underwater
             }
 
             EnsureGuiStyles();
+
+            if (startupLoading || worldSyncLoading)
+            {
+                DrawLoadingOverlay();
+                return;
+            }
+
             DrawThreadNameTags();
         }
 
         public void SyncThreadWorld(IReadOnlyList<AquariumThreadSnapshot> threads, IReadOnlyList<AquariumArchivedPetSnapshot> syncedArchivedPets, string detail)
         {
+            QueuedWorldSync sync = new QueuedWorldSync
+            {
+                threads = threads != null ? new List<AquariumThreadSnapshot>(threads) : new List<AquariumThreadSnapshot>(),
+                archivedPets = syncedArchivedPets != null ? new List<AquariumArchivedPetSnapshot>(syncedArchivedPets) : new List<AquariumArchivedPetSnapshot>(),
+                detail = detail
+            };
+
+            if (worldSyncRoutine != null)
+            {
+                queuedWorldSync = sync;
+                return;
+            }
+
+            worldSyncRoutine = StartCoroutine(RunQueuedThreadWorldSync(sync));
+        }
+
+        private IEnumerator RunQueuedThreadWorldSync(QueuedWorldSync initialSync)
+        {
+            QueuedWorldSync sync = initialSync;
+
+            while (sync != null)
+            {
+                queuedWorldSync = null;
+                yield return ApplyThreadWorldSync(sync);
+                sync = queuedWorldSync;
+            }
+
+            worldSyncLoading = false;
+            worldSyncRoutine = null;
+        }
+
+        private IEnumerator ApplyThreadWorldSync(QueuedWorldSync sync)
+        {
+            int totalWork = sync.threads.Count + sync.archivedPets.Count + activeThreads.Count + archivedPets.Count;
+            int completedWork = 0;
+            worldSyncLoading = CountWorldSyncMutations(sync) > 8;
+            SetWorldSyncProgress(0, Mathf.Max(1, totalWork), "Loading thread pets");
+
             HashSet<string> liveIds = new HashSet<string>();
 
-            if (threads != null)
+            if (sync.threads != null)
             {
-                for (int i = 0; i < threads.Count; i++)
+                for (int i = 0; i < sync.threads.Count; i++)
                 {
-                    AquariumThreadSnapshot snapshot = threads[i];
+                    AquariumThreadSnapshot snapshot = sync.threads[i];
+                    completedWork++;
 
                     if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.id))
                     {
+                        SetWorldSyncProgress(completedWork, totalWork, "Loading thread pets");
+                        yield return null;
                         continue;
                     }
 
@@ -121,6 +191,9 @@ namespace Underwater
                             Destroy(threadObject);
                         }
                     }
+
+                    SetWorldSyncProgress(completedWork, totalWork, $"Loading thread pets {completedWork}/{totalWork}");
+                    yield return null;
                 }
             }
 
@@ -137,6 +210,7 @@ namespace Underwater
             for (int i = 0; i < staleActiveIds.Count; i++)
             {
                 string id = staleActiveIds[i];
+                completedWork++;
 
                 if (activeThreads.TryGetValue(id, out ThreadPetAI threadPet))
                 {
@@ -147,18 +221,24 @@ namespace Underwater
 
                     activeThreads.Remove(id);
                 }
+
+                SetWorldSyncProgress(completedWork, totalWork, $"Cleaning up thread pets {completedWork}/{totalWork}");
+                yield return null;
             }
 
             HashSet<string> archivedIds = new HashSet<string>();
 
-            if (syncedArchivedPets != null)
+            if (sync.archivedPets != null)
             {
-                for (int i = 0; i < syncedArchivedPets.Count; i++)
+                for (int i = 0; i < sync.archivedPets.Count; i++)
                 {
-                    AquariumArchivedPetSnapshot snapshot = syncedArchivedPets[i];
+                    AquariumArchivedPetSnapshot snapshot = sync.archivedPets[i];
+                    completedWork++;
 
                     if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.id))
                     {
+                        SetWorldSyncProgress(completedWork, totalWork, "Loading archived pets");
+                        yield return null;
                         continue;
                     }
 
@@ -166,6 +246,8 @@ namespace Underwater
 
                     if (archivedPets.ContainsKey(snapshot.id))
                     {
+                        SetWorldSyncProgress(completedWork, totalWork, $"Loading archived pets {completedWork}/{totalWork}");
+                        yield return null;
                         continue;
                     }
 
@@ -180,6 +262,9 @@ namespace Underwater
                     {
                         Destroy(archivedPetObject);
                     }
+
+                    SetWorldSyncProgress(completedWork, totalWork, $"Loading archived pets {completedWork}/{totalWork}");
+                    yield return null;
                 }
             }
 
@@ -196,6 +281,7 @@ namespace Underwater
             for (int i = 0; i < staleArchivedIds.Count; i++)
             {
                 string id = staleArchivedIds[i];
+                completedWork++;
 
                 if (archivedPets.TryGetValue(id, out ArchivedThreadPet archivedPet))
                 {
@@ -206,12 +292,95 @@ namespace Underwater
 
                     archivedPets.Remove(id);
                 }
+
+                SetWorldSyncProgress(completedWork, totalWork, $"Cleaning up archived pets {completedWork}/{totalWork}");
+                yield return null;
             }
 
-            directorStatusLine = string.IsNullOrWhiteSpace(detail)
+            directorStatusLine = string.IsNullOrWhiteSpace(sync.detail)
                 ? $"Synced {ActiveThreadCount} swimming threads and {ArchivedPetCount} archived pets."
-                : detail;
+                : sync.detail;
             UpdateNearestThreadStatus();
+            SetWorldSyncProgress(totalWork, Mathf.Max(1, totalWork), "Thread pets ready");
+            worldSyncLoading = false;
+        }
+
+        private void SetWorldSyncProgress(int completedWork, int totalWork, string status)
+        {
+            worldSyncProgress = totalWork <= 0 ? 1f : Mathf.Clamp01((float)completedWork / totalWork);
+
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                worldSyncStatus = status;
+            }
+        }
+
+        private int CountWorldSyncMutations(QueuedWorldSync sync)
+        {
+            HashSet<string> incomingActiveIds = new HashSet<string>();
+            HashSet<string> incomingArchivedIds = new HashSet<string>();
+
+            if (sync.threads != null)
+            {
+                for (int i = 0; i < sync.threads.Count; i++)
+                {
+                    AquariumThreadSnapshot snapshot = sync.threads[i];
+
+                    if (snapshot != null && !string.IsNullOrWhiteSpace(snapshot.id))
+                    {
+                        incomingActiveIds.Add(snapshot.id);
+                    }
+                }
+            }
+
+            if (sync.archivedPets != null)
+            {
+                for (int i = 0; i < sync.archivedPets.Count; i++)
+                {
+                    AquariumArchivedPetSnapshot snapshot = sync.archivedPets[i];
+
+                    if (snapshot != null && !string.IsNullOrWhiteSpace(snapshot.id))
+                    {
+                        incomingArchivedIds.Add(snapshot.id);
+                    }
+                }
+            }
+
+            int mutationCount = 0;
+
+            foreach (string id in incomingActiveIds)
+            {
+                if (!activeThreads.ContainsKey(id))
+                {
+                    mutationCount++;
+                }
+            }
+
+            foreach (string id in activeThreads.Keys)
+            {
+                if (!incomingActiveIds.Contains(id))
+                {
+                    mutationCount++;
+                }
+            }
+
+            foreach (string id in incomingArchivedIds)
+            {
+                if (!archivedPets.ContainsKey(id))
+                {
+                    mutationCount++;
+                }
+            }
+
+            foreach (string id in archivedPets.Keys)
+            {
+                if (!incomingArchivedIds.Contains(id))
+                {
+                    mutationCount++;
+                }
+            }
+
+            return mutationCount;
         }
 
         public void UpdateBridgeState(string state, string detail)
@@ -222,6 +391,36 @@ namespace Underwater
             {
                 directorStatusLine = detail;
             }
+        }
+
+        public void RequestWorkThreadSpawnFromPlayer()
+        {
+            if (startupLoading)
+            {
+                SetWorkThreadStatus("Codex pets are still loading. Try again in a moment.");
+                return;
+            }
+
+            if (workThreadSpawnInFlight)
+            {
+                SetWorkThreadStatus("Already creating a Codex work thread.");
+                return;
+            }
+
+            if (aquariumBridge == null || !aquariumBridge.IsConnected)
+            {
+                SetWorkThreadStatus("Codex bridge is offline. Start the app-server, then press E again.");
+                UpdateBridgeState("offline", workThreadStatusLine);
+                return;
+            }
+
+            int nextThreadNumber = spawnedWorkThreadCount + 1;
+            string title = $"Underwater reef task {nextThreadNumber}";
+            string prompt = BuildWorkThreadPrompt(title);
+
+            workThreadSpawnInFlight = true;
+            SetWorkThreadStatus($"Creating '{title}'...");
+            _ = CreateWorkThreadFromWorldAsync(title, prompt);
         }
 
         public AquariumDirectorSnapshot CreateSnapshot()
@@ -353,6 +552,22 @@ namespace Underwater
                 new Color(0f, 0.02f, 0.03f, 0.38f),
                 new Color(0f, 0.02f, 0.03f, 0f),
                 0f);
+
+            loadingTitleStyle = new GUIStyle(labelStyle)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 22,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = new Color(0.9f, 1f, 1f) }
+            };
+
+            loadingStatusStyle = new GUIStyle(labelStyle)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 14,
+                clipping = TextClipping.Clip,
+                normal = { textColor = new Color(0.76f, 0.95f, 1f) }
+            };
         }
 
         private static Texture2D CreateRoundedRectTexture(int width, int height, float radius, Color fillColor, Color borderColor, float borderWidth)
@@ -460,12 +675,17 @@ namespace Underwater
                 return;
             }
 
+            if (screenPoint.x < 0f || screenPoint.x > Screen.width || screenPoint.y < 0f || screenPoint.y > Screen.height)
+            {
+                return;
+            }
+
             GUIContent content = new GUIContent(message);
             float width = Mathf.Clamp(threadTagStyle.CalcSize(content).x + 32f, 150f, 300f);
             float textHeight = threadTagStyle.CalcHeight(content, width - 28f);
             float height = Mathf.Clamp(textHeight + 18f, 42f, 92f);
-            float x = Mathf.Clamp(screenPoint.x - (width * 0.5f), 6f, Screen.width - width - 6f);
-            float y = Mathf.Clamp(Screen.height - screenPoint.y - height - 18f, 6f, Screen.height - height - 6f);
+            float x = screenPoint.x - (width * 0.5f);
+            float y = Screen.height - screenPoint.y - height - 18f;
             Rect tagRect = new Rect(x, y, width, height);
             Rect shadowRect = new Rect(tagRect.x + 2f, tagRect.y + 3f, tagRect.width, tagRect.height);
 
@@ -473,6 +693,40 @@ namespace Underwater
             GUI.Box(shadowRect, GUIContent.none, speechBubbleShadowStyle);
             GUI.Box(tagRect, GUIContent.none, speechBubbleStyle);
             GUI.Label(tagRect, content, threadTagStyle);
+        }
+
+        private void DrawLoadingOverlay()
+        {
+            bool loadingCatalog = startupLoading && petCatalog != null;
+            float progress = loadingCatalog ? petCatalog.LoadProgress : worldSyncProgress;
+            string title = loadingCatalog ? "Loading thread pets" : "Syncing threads";
+            string status = loadingCatalog ? petCatalog.LoadingStatus : worldSyncStatus;
+            float width = Mathf.Clamp(Screen.width - 48f, 280f, 520f);
+            float height = 118f;
+            float x = (Screen.width - width) * 0.5f;
+            float y = Mathf.Max(28f, (Screen.height - height) * 0.5f);
+            Rect panelRect = new Rect(x, y, width, height);
+            Rect titleRect = new Rect(x + 18f, y + 15f, width - 36f, 28f);
+            Rect barRect = new Rect(x + 34f, y + 58f, width - 68f, 16f);
+            Rect fillRect = new Rect(barRect.x, barRect.y, barRect.width * Mathf.Clamp01(progress), barRect.height);
+            Rect statusRect = new Rect(x + 22f, y + 84f, width - 44f, 22f);
+            Color previousColor = GUI.color;
+
+            GUI.color = new Color(0.01f, 0.07f, 0.1f, 0.82f);
+            GUI.DrawTexture(panelRect, Texture2D.whiteTexture);
+
+            GUI.color = new Color(0.2f, 0.95f, 1f, 0.18f);
+            GUI.DrawTexture(new Rect(panelRect.x, panelRect.yMax - 2f, panelRect.width, 2f), Texture2D.whiteTexture);
+
+            GUI.color = new Color(0.01f, 0.19f, 0.23f, 0.95f);
+            GUI.DrawTexture(barRect, Texture2D.whiteTexture);
+
+            GUI.color = new Color(0.3f, 0.95f, 0.85f, 0.96f);
+            GUI.DrawTexture(fillRect, Texture2D.whiteTexture);
+
+            GUI.color = previousColor;
+            GUI.Label(titleRect, title, loadingTitleStyle);
+            GUI.Label(statusRect, status, loadingStatusStyle);
         }
 
         private void UpdateNearestThreadStatus()
@@ -566,6 +820,47 @@ namespace Underwater
 
             summary.Append(directorStatusLine);
             return summary.ToString().Trim();
+        }
+
+        private string BuildWorkThreadPrompt(string title)
+        {
+            StringBuilder prompt = new StringBuilder();
+            prompt.Append("A player spawned this Codex work thread from play mode inside the Underwater world.");
+            prompt.AppendLine();
+            prompt.AppendLine();
+            prompt.Append("Thread title: ");
+            prompt.Append(title);
+            prompt.AppendLine();
+            prompt.Append("World state: ");
+            prompt.Append(BuildWorldSummary());
+            prompt.AppendLine();
+            prompt.AppendLine();
+            prompt.Append("Use the current workspace when it is relevant. Start by stating what useful next step you can take from this context.");
+            return prompt.ToString();
+        }
+
+        private async Task CreateWorkThreadFromWorldAsync(string title, string prompt)
+        {
+            try
+            {
+                string threadId = await aquariumBridge.CreateWorkThreadAsync(title, prompt);
+                spawnedWorkThreadCount++;
+                workThreadSpawnInFlight = false;
+                SetWorkThreadStatus($"Created '{title}' ({Shorten(threadId, 8)}).");
+                directorStatusLine = "Spawned a Codex work thread from the reef.";
+            }
+            catch (Exception ex)
+            {
+                workThreadSpawnInFlight = false;
+                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+                SetWorkThreadStatus($"Could not spawn work thread: {Shorten(message, 72)}");
+                UpdateBridgeState(aquariumBridge != null && aquariumBridge.IsConnected ? "warning" : "offline", workThreadStatusLine);
+            }
+        }
+
+        private void SetWorkThreadStatus(string status)
+        {
+            workThreadStatusLine = string.IsNullOrWhiteSpace(status) ? string.Empty : status.Trim();
         }
 
         private static string FormatVector(Vector3 vector)
@@ -737,7 +1032,7 @@ namespace Underwater
             Player.Initialize(this, controller, viewPivotObject.transform, camera);
         }
 
-        private void AttachAquariumBridge()
+        private void AttachAquariumBridge(bool autoStart)
         {
             aquariumBridge = GetComponent<AquariumDirectorBridge>();
 
@@ -746,8 +1041,27 @@ namespace Underwater
                 aquariumBridge = gameObject.AddComponent<AquariumDirectorBridge>();
             }
 
+            aquariumBridge.SetAutoConnect(autoStart);
             aquariumBridge.Initialize(this);
-            UpdateBridgeState("starting", "Scanning Codex sessions");
+
+            if (autoStart)
+            {
+                UpdateBridgeState("starting", "Scanning Codex sessions");
+                aquariumBridge.StartBridge();
+            }
+        }
+
+        private IEnumerator LoadCodexPetsThenAttachBridge()
+        {
+            startupLoading = true;
+            directorStatusLine = "Loading Codex pet sprites";
+            petCatalog = CodexPetCatalog.Shared;
+
+            yield return petCatalog.LoadAsync();
+            yield return null;
+
+            startupLoading = false;
+            AttachAquariumBridge(true);
         }
 
         private void CreateKelpCluster(Transform parent, int index)

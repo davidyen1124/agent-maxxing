@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
@@ -45,6 +46,11 @@ namespace Underwater
         private readonly List<CodexPetDefinition> pets = new List<CodexPetDefinition>();
         private readonly HashSet<string> loadedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private bool loaded;
+        private bool loading;
+
+        public float LoadProgress { get; private set; }
+
+        public string LoadingStatus { get; private set; } = "Preparing Codex pets";
 
         public static CodexPetCatalog Shared
         {
@@ -92,9 +98,62 @@ namespace Underwater
             }
         }
 
-        private void EnsureLoaded()
+        public IEnumerator LoadAsync()
         {
             if (loaded)
+            {
+                SetLoadProgress(1f, $"Codex pets ready ({pets.Count})");
+                yield break;
+            }
+
+            if (loading)
+            {
+                while (!loaded)
+                {
+                    yield return null;
+                }
+
+                yield break;
+            }
+
+            loading = true;
+            SetLoadProgress(0f, "Scanning Codex pet catalog");
+            yield return null;
+
+            string petsRoot = Path.Combine(Application.streamingAssetsPath, ProjectPetsFolderName);
+
+            if (Directory.Exists(petsRoot))
+            {
+                string[] manifests = Directory.GetFiles(petsRoot, "pet.json", SearchOption.AllDirectories);
+                Array.Sort(manifests, StringComparer.OrdinalIgnoreCase);
+
+                if (manifests.Length == 0)
+                {
+                    Debug.LogWarning($"[CodexPetCatalog] Project pet folder has no pet manifests: {petsRoot}");
+                }
+
+                for (int i = 0; i < manifests.Length; i++)
+                {
+                    string petName = Path.GetFileName(Path.GetDirectoryName(manifests[i]) ?? manifests[i]);
+                    SetLoadProgress((float)i / Mathf.Max(1, manifests.Length), $"Loading pet {i + 1}/{manifests.Length}: {petName}");
+                    yield return TryLoadPetAsync(manifests[i]);
+                    SetLoadProgress((float)(i + 1) / Mathf.Max(1, manifests.Length), $"Loaded {i + 1}/{manifests.Length} pet atlases");
+                    yield return null;
+                }
+            }
+            else
+            {
+                Debug.LogWarning($"[CodexPetCatalog] Project pet folder is missing: {petsRoot}");
+            }
+
+            loaded = true;
+            loading = false;
+            SetLoadProgress(1f, pets.Count > 0 ? $"Codex pets ready ({pets.Count})" : "No Codex pet atlases found");
+        }
+
+        private void EnsureLoaded()
+        {
+            if (loaded || loading)
             {
                 return;
             }
@@ -121,41 +180,75 @@ namespace Underwater
 
         private void TryLoadPet(string manifestPath)
         {
+            if (!TryReadManifest(manifestPath, out PetManifest manifest, out string spritesheetPath))
+            {
+                return;
+            }
+
+            Texture2D spritesheet = LoadSpritesheet(manifest.id, spritesheetPath);
+
+            if (spritesheet != null)
+            {
+                AddPet(CreatePetDefinition(manifest, spritesheet));
+            }
+        }
+
+        private IEnumerator TryLoadPetAsync(string manifestPath)
+        {
+            if (!TryReadManifest(manifestPath, out PetManifest manifest, out string spritesheetPath))
+            {
+                yield break;
+            }
+
+            Texture2D spritesheet = null;
+            yield return LoadSpritesheetAsync(manifest.id, spritesheetPath, texture => spritesheet = texture);
+
+            if (spritesheet != null)
+            {
+                AddPet(CreatePetDefinition(manifest, spritesheet));
+            }
+        }
+
+        private static bool TryReadManifest(string manifestPath, out PetManifest manifest, out string spritesheetPath)
+        {
+            manifest = null;
+            spritesheetPath = string.Empty;
+
             try
             {
-                PetManifest manifest = JsonUtility.FromJson<PetManifest>(File.ReadAllText(manifestPath));
-
-                if (manifest == null || string.IsNullOrWhiteSpace(manifest.id) || string.IsNullOrWhiteSpace(manifest.spritesheetPath))
-                {
-                    return;
-                }
-
-                string petFolder = Path.GetDirectoryName(manifestPath);
-                string spritesheetPath = Path.IsPathRooted(manifest.spritesheetPath)
-                    ? manifest.spritesheetPath
-                    : Path.Combine(petFolder ?? string.Empty, manifest.spritesheetPath);
-
-                Texture2D spritesheet = LoadSpritesheet(manifest.id, spritesheetPath);
-
-                if (spritesheet == null)
-                {
-                    return;
-                }
-
-                AddPet(new CodexPetDefinition
-                {
-                    Id = manifest.id.Trim(),
-                    DisplayName = string.IsNullOrWhiteSpace(manifest.displayName) ? manifest.id.Trim() : manifest.displayName.Trim(),
-                    Description = string.IsNullOrWhiteSpace(manifest.description) ? string.Empty : manifest.description.Trim(),
-                    Kind = string.IsNullOrWhiteSpace(manifest.kind) ? string.Empty : manifest.kind.Trim(),
-                    Source = string.IsNullOrWhiteSpace(manifest.source) ? "project" : manifest.source.Trim(),
-                    Spritesheet = spritesheet
-                });
+                manifest = JsonUtility.FromJson<PetManifest>(File.ReadAllText(manifestPath));
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"[CodexPetCatalog] Could not load pet manifest '{manifestPath}': {ex.Message}");
+                return false;
             }
+
+            if (manifest == null || string.IsNullOrWhiteSpace(manifest.id) || string.IsNullOrWhiteSpace(manifest.spritesheetPath))
+            {
+                return false;
+            }
+
+            string petFolder = Path.GetDirectoryName(manifestPath);
+            spritesheetPath = Path.IsPathRooted(manifest.spritesheetPath)
+                ? manifest.spritesheetPath
+                : Path.Combine(petFolder ?? string.Empty, manifest.spritesheetPath);
+            return true;
+        }
+
+        private static CodexPetDefinition CreatePetDefinition(PetManifest manifest, Texture2D spritesheet)
+        {
+            string id = manifest.id.Trim();
+
+            return new CodexPetDefinition
+            {
+                Id = id,
+                DisplayName = string.IsNullOrWhiteSpace(manifest.displayName) ? id : manifest.displayName.Trim(),
+                Description = string.IsNullOrWhiteSpace(manifest.description) ? string.Empty : manifest.description.Trim(),
+                Kind = string.IsNullOrWhiteSpace(manifest.kind) ? string.Empty : manifest.kind.Trim(),
+                Source = string.IsNullOrWhiteSpace(manifest.source) ? "project" : manifest.source.Trim(),
+                Spritesheet = spritesheet
+            };
         }
 
         private void AddPet(CodexPetDefinition pet)
@@ -203,6 +296,56 @@ namespace Underwater
             texture.wrapMode = TextureWrapMode.Clamp;
             texture.anisoLevel = 0;
             return texture;
+        }
+
+        private static IEnumerator LoadSpritesheetAsync(string petId, string spritesheetPath, Action<Texture2D> onLoaded)
+        {
+            onLoaded?.Invoke(null);
+
+            if (string.IsNullOrWhiteSpace(spritesheetPath) || !File.Exists(spritesheetPath))
+            {
+                yield break;
+            }
+
+            string loadPath = spritesheetPath;
+
+            if (string.Equals(Path.GetExtension(spritesheetPath), ".webp", StringComparison.OrdinalIgnoreCase))
+            {
+                string cachedPng = string.Empty;
+                yield return ConvertWebpToCachedPngAsync(petId, spritesheetPath, convertedPath => cachedPng = convertedPath);
+
+                if (!string.IsNullOrWhiteSpace(cachedPng))
+                {
+                    loadPath = cachedPng;
+                }
+            }
+
+            Texture2D texture = TryLoadImageFile(loadPath);
+
+            if (texture == null && !string.Equals(loadPath, spritesheetPath, StringComparison.OrdinalIgnoreCase))
+            {
+                texture = TryLoadImageFile(spritesheetPath);
+            }
+
+            if (texture == null)
+            {
+                Debug.LogWarning($"[CodexPetCatalog] Unity could not decode pet spritesheet '{spritesheetPath}'.");
+                yield break;
+            }
+
+            if (texture.width != ExpectedAtlasWidth || texture.height != ExpectedAtlasHeight)
+            {
+                Debug.LogWarning(
+                    $"[CodexPetCatalog] Pet '{petId}' atlas is {texture.width}x{texture.height}, expected {ExpectedAtlasWidth}x{ExpectedAtlasHeight}.");
+                UnityEngine.Object.Destroy(texture);
+                yield break;
+            }
+
+            texture.name = $"Codex Pet {petId}";
+            texture.filterMode = FilterMode.Point;
+            texture.wrapMode = TextureWrapMode.Clamp;
+            texture.anisoLevel = 0;
+            onLoaded?.Invoke(texture);
         }
 
         private static Texture2D TryLoadImageFile(string path)
@@ -267,6 +410,101 @@ namespace Underwater
             {
                 Debug.LogWarning($"[CodexPetCatalog] WebP conversion failed for '{sourcePath}': {ex.Message}");
                 return string.Empty;
+            }
+        }
+
+        private static IEnumerator ConvertWebpToCachedPngAsync(string petId, string sourcePath, Action<string> onConverted)
+        {
+            onConverted?.Invoke(string.Empty);
+
+            if (Application.platform != RuntimePlatform.OSXEditor && Application.platform != RuntimePlatform.OSXPlayer)
+            {
+                yield break;
+            }
+
+            System.Diagnostics.Process process = null;
+            string outputPath;
+
+            try
+            {
+                string cacheRoot = Path.Combine(Application.temporaryCachePath, "UnderwaterPets");
+                Directory.CreateDirectory(cacheRoot);
+
+                outputPath = Path.Combine(cacheRoot, $"{SafeFilename(petId)}.png");
+
+                if (File.Exists(outputPath) && File.GetLastWriteTimeUtc(outputPath) >= File.GetLastWriteTimeUtc(sourcePath))
+                {
+                    onConverted?.Invoke(outputPath);
+                    yield break;
+                }
+
+                System.Diagnostics.ProcessStartInfo startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "/usr/bin/sips",
+                    Arguments = $"-s format png {QuoteArgument(sourcePath)} --out {QuoteArgument(outputPath)}",
+                    CreateNoWindow = true,
+                    RedirectStandardError = true,
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false
+                };
+
+                process = System.Diagnostics.Process.Start(startInfo);
+
+                if (process == null)
+                {
+                    yield break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[CodexPetCatalog] WebP conversion failed for '{sourcePath}': {ex.Message}");
+                yield break;
+            }
+
+            float startedAt = Time.realtimeSinceStartup;
+
+            while (!process.HasExited)
+            {
+                if (Time.realtimeSinceStartup - startedAt > 12f)
+                {
+                    try
+                    {
+                        process.Kill();
+                    }
+                    catch (Exception)
+                    {
+                        // Best-effort cleanup; a failed conversion only skips this atlas.
+                    }
+
+                    process.Dispose();
+                    yield break;
+                }
+
+                yield return null;
+            }
+
+            try
+            {
+                if (process.ExitCode == 0 && File.Exists(outputPath))
+                {
+                    onConverted?.Invoke(outputPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[CodexPetCatalog] WebP conversion failed for '{sourcePath}': {ex.Message}");
+            }
+
+            process.Dispose();
+        }
+
+        private void SetLoadProgress(float progress, string status)
+        {
+            LoadProgress = Mathf.Clamp01(progress);
+
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                LoadingStatus = status;
             }
         }
 

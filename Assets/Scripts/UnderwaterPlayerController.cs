@@ -37,6 +37,7 @@ namespace Underwater
             UpdateCursorState();
             HandleLook();
             HandleMovement();
+            HandleInteraction();
         }
 
         private void UpdateCursorState()
@@ -145,6 +146,26 @@ namespace Underwater
 
             characterController.Move(velocity * Time.deltaTime);
             transform.position = director.ClampPoint(transform.position, 0.8f);
+        }
+
+        private void HandleInteraction()
+        {
+            bool spawnPressed = false;
+
+            if (Keyboard.current != null)
+            {
+                spawnPressed = Keyboard.current.eKey.wasPressedThisFrame;
+            }
+
+            if (Gamepad.current != null)
+            {
+                spawnPressed |= Gamepad.current.buttonNorth.wasPressedThisFrame;
+            }
+
+            if (spawnPressed)
+            {
+                director.RequestWorkThreadSpawnFromPlayer();
+            }
         }
     }
 }

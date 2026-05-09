@@ -64,6 +64,11 @@ namespace Underwater
             director = owningDirector;
         }
 
+        public void SetAutoConnect(bool enabled)
+        {
+            autoConnect = enabled;
+        }
+
         private void Start()
         {
             if (autoConnect)
@@ -139,19 +144,23 @@ namespace Underwater
             string safeTitle = string.IsNullOrWhiteSpace(title) ? "Underwater work item" : title.Trim();
             SetStatus("acting", $"Creating task '{safeTitle}'");
 
-            Dictionary<string, object> response = await SendRequestAsync(
-                "thread/start",
-                new Dictionary<string, object>
-                {
-                    ["serviceName"] = "underwater_work_thread",
-                    ["baseInstructions"] =
-                        "You are a Codex work thread spawned from the Underwater reef. " +
-                        "Stay focused on the task that created this thread. " +
-                        "Use the current workspace when relevant.",
-                    ["experimentalRawEvents"] = false,
-                    ["persistExtendedHistory"] = true
-                },
-                token);
+            Dictionary<string, object> threadStartParameters = new Dictionary<string, object>
+            {
+                ["serviceName"] = "underwater_work_thread",
+                ["baseInstructions"] =
+                    "You are a Codex work thread spawned from the Underwater reef. " +
+                    "Stay focused on the task that created this thread. " +
+                    "Use the current workspace when relevant.",
+                ["threadSource"] = "user"
+            };
+            string projectRootPath = GetUnityProjectRootPath();
+
+            if (!string.IsNullOrWhiteSpace(projectRootPath))
+            {
+                threadStartParameters["cwd"] = projectRootPath;
+            }
+
+            Dictionary<string, object> response = await SendRequestAsync("thread/start", threadStartParameters, token);
 
             string createdThreadId = ReadString(response, "result", "thread", "id") ?? Guid.NewGuid().ToString();
             string initialPrompt = string.IsNullOrWhiteSpace(prompt) ? safeTitle : prompt.Trim();
@@ -951,35 +960,42 @@ namespace Underwater
             byte[] buffer = new byte[4096];
             ArraySegment<byte> segment = new ArraySegment<byte>(buffer);
 
-            while (!token.IsCancellationRequested && localSocket.State == WebSocketState.Open)
+            try
             {
-                using MemoryStream messageStream = new MemoryStream();
-                WebSocketReceiveResult result;
-
-                do
+                while (!token.IsCancellationRequested && localSocket.State == WebSocketState.Open)
                 {
-                    result = await localSocket.ReceiveAsync(segment, token);
+                    using MemoryStream messageStream = new MemoryStream();
+                    WebSocketReceiveResult result;
 
-                    if (result.MessageType == WebSocketMessageType.Close)
+                    do
                     {
-                        if (localSocket.State == WebSocketState.Open || localSocket.State == WebSocketState.CloseReceived)
+                        result = await localSocket.ReceiveAsync(segment, token);
+
+                        if (result.MessageType == WebSocketMessageType.Close)
                         {
-                            await localSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closing", token);
+                            if (localSocket.State == WebSocketState.Open || localSocket.State == WebSocketState.CloseReceived)
+                            {
+                                await localSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closing", token);
+                            }
+
+                            return;
                         }
 
-                        return;
+                        messageStream.Write(buffer, 0, result.Count);
                     }
+                    while (!result.EndOfMessage);
 
-                    messageStream.Write(buffer, 0, result.Count);
+                    string json = Encoding.UTF8.GetString(messageStream.ToArray());
+
+                    if (!string.IsNullOrWhiteSpace(json))
+                    {
+                        HandleIncomingMessage(json);
+                    }
                 }
-                while (!result.EndOfMessage);
-
-                string json = Encoding.UTF8.GetString(messageStream.ToArray());
-
-                if (!string.IsNullOrWhiteSpace(json))
-                {
-                    HandleIncomingMessage(json);
-                }
+            }
+            finally
+            {
+                FailPendingResponses(new IOException("Codex app-server socket closed before a response was received."));
             }
         }
 
@@ -1041,15 +1057,23 @@ namespace Underwater
                 new TaskCompletionSource<Dictionary<string, object>>(TaskCreationOptions.RunContinuationsAsynchronously);
             pendingResponses[currentRequestId] = responseSource;
 
-            await SendJsonAsync(
-                MiniJson.Serialize(
-                    new Dictionary<string, object>
-                    {
-                        ["id"] = currentRequestId,
-                        ["method"] = method,
-                        ["params"] = parameters
-                    }),
-                token);
+            try
+            {
+                await SendJsonAsync(
+                    MiniJson.Serialize(
+                        new Dictionary<string, object>
+                        {
+                            ["id"] = currentRequestId,
+                            ["method"] = method,
+                            ["params"] = parameters
+                        }),
+                    token);
+            }
+            catch
+            {
+                pendingResponses.TryRemove(currentRequestId, out _);
+                throw;
+            }
 
             using CancellationTokenRegistration registration = token.Register(() =>
             {
@@ -1096,10 +1120,12 @@ namespace Underwater
 
             try
             {
-                if (localSocket.State == WebSocketState.Open)
+                if (localSocket.State != WebSocketState.Open)
                 {
-                    await localSocket.SendAsync(new ArraySegment<byte>(payload), WebSocketMessageType.Text, true, token);
+                    throw new InvalidOperationException("Codex app-server socket is not open.");
                 }
+
+                await localSocket.SendAsync(new ArraySegment<byte>(payload), WebSocketMessageType.Text, true, token);
             }
             finally
             {
@@ -1126,6 +1152,17 @@ namespace Underwater
         private void EnqueueStatus(string phase, string text)
         {
             EnqueueMainThread(() => SetStatus(phase, text));
+        }
+
+        private void FailPendingResponses(Exception exception)
+        {
+            foreach (KeyValuePair<int, TaskCompletionSource<Dictionary<string, object>>> pair in pendingResponses)
+            {
+                if (pendingResponses.TryRemove(pair.Key, out TaskCompletionSource<Dictionary<string, object>> responseSource))
+                {
+                    responseSource.TrySetException(exception);
+                }
+            }
         }
 
         private void SetStatus(string phase, string text)
@@ -1165,6 +1202,31 @@ namespace Underwater
         {
             object value = Traverse(root, path);
             return value as string;
+        }
+
+        private static string GetUnityProjectRootPath()
+        {
+            try
+            {
+                string assetsPath = Application.dataPath;
+
+                if (!string.IsNullOrWhiteSpace(assetsPath))
+                {
+                    DirectoryInfo assetsDirectory = new DirectoryInfo(assetsPath);
+
+                    if (string.Equals(assetsDirectory.Name, "Assets", StringComparison.OrdinalIgnoreCase) && assetsDirectory.Parent != null)
+                    {
+                        return assetsDirectory.Parent.FullName;
+                    }
+                }
+
+                string currentDirectory = Directory.GetCurrentDirectory();
+                return Path.IsPathRooted(currentDirectory) ? currentDirectory : null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
 
         private static object Traverse(Dictionary<string, object> root, params string[] path)
