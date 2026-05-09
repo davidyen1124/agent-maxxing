@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace Underwater
@@ -9,73 +8,98 @@ namespace Underwater
         Lobster
     }
 
+    public enum CreatureDirectiveMode
+    {
+        Autonomous,
+        MoveToPoint,
+        GuardZone,
+        PressurePlayer,
+        RetreatFromPlayer,
+        HoldPosition
+    }
+
     public abstract class SeaCreature : MonoBehaviour
     {
-        private readonly List<Material> runtimeMaterials = new List<Material>();
-        private readonly List<Color> baseEmissionColors = new List<Color>();
-
-        private float hitFlash;
-        private float health;
-
+        private CreatureDirectiveMode directiveMode;
+        private Vector3 directiveTarget;
+        private float directiveRadius;
+        private float directiveExpiresAt;
         protected UnderwaterGameDirector Director { get; private set; }
 
         protected Transform ModelRoot { get; set; }
 
         protected Vector3 Velocity { get; set; }
 
-        protected float MaxHealth { get; private set; }
+        public string CreatureId { get; private set; }
 
         public CreatureKind Kind { get; private set; }
 
-        public bool IsAlive { get; private set; }
+        public CreatureDirectiveMode DirectiveMode
+        {
+            get
+            {
+                RefreshDirectiveLifetime();
+                return directiveMode;
+            }
+        }
+
+        protected Vector3 DirectiveTarget => directiveTarget;
+
+        protected float DirectiveRadius => directiveRadius;
 
         protected virtual void Update()
         {
-            hitFlash = Mathf.MoveTowards(hitFlash, 0f, Time.deltaTime * 3.8f);
-            UpdateRuntimeMaterialState();
-
-            if (!IsAlive)
-            {
-                transform.position += Vector3.down * 1.3f * Time.deltaTime;
-                transform.Rotate(6f * Time.deltaTime, 0f, 9f * Time.deltaTime, Space.Self);
-                return;
-            }
-
-            TickAlive();
+            TickBehavior();
         }
 
-        public void InitializeBase(UnderwaterGameDirector director, CreatureKind kind, float maxHealth)
+        protected virtual void OnDestroy()
+        {
+            if (Director != null)
+            {
+                Director.UnregisterCreature(this);
+            }
+        }
+
+        public void InitializeBase(UnderwaterGameDirector director, CreatureKind kind)
         {
             Director = director;
             Kind = kind;
-            MaxHealth = maxHealth;
-            health = maxHealth;
-            IsAlive = true;
+            CreatureId = director.AllocateCreatureId(kind);
+            directiveMode = CreatureDirectiveMode.Autonomous;
             Director.RegisterCreature(this);
         }
 
-        public virtual void TakeDamage(float damage, Vector3 hitPoint, Vector3 hitDirection)
+        public void ApplyDirective(CreatureDirectiveMode mode, Vector3 target, float radius, float durationSeconds)
         {
-            if (!IsAlive)
-            {
-                return;
-            }
-
-            health -= damage;
-            hitFlash = Mathf.Clamp01(hitFlash + 1f);
-            Velocity += hitDirection.normalized * 1.5f;
-
-            if (health <= 0f)
-            {
-                Die();
-            }
+            directiveMode = mode;
+            directiveTarget = target;
+            directiveRadius = Mathf.Max(0.5f, radius);
+            directiveExpiresAt = durationSeconds > 0.05f ? Time.time + durationSeconds : 0f;
         }
 
-        protected Material CreateRuntimeMaterial(Material sourceMaterial, Color emissionColor)
+        public void ClearDirective()
         {
-            Material material = new Material(sourceMaterial);
-            TrackMaterial(material, emissionColor);
-            return material;
+            directiveMode = CreatureDirectiveMode.Autonomous;
+            directiveTarget = transform.position;
+            directiveRadius = 0f;
+            directiveExpiresAt = 0f;
+        }
+
+        public AquariumCreatureSnapshot CreateSnapshot()
+        {
+            return new AquariumCreatureSnapshot
+            {
+                id = CreatureId,
+                kind = Kind.ToString().ToLowerInvariant(),
+                directive = DirectiveMode.ToString(),
+                position = SerializableVector3.FromVector3(transform.position),
+                velocity = SerializableVector3.FromVector3(Velocity)
+            };
+        }
+
+        protected Material CreateRuntimeMaterial(Material sourceMaterial)
+        {
+            return new Material(sourceMaterial);
         }
 
         protected void AddBuoyancyBand(float centerHeight, float strength)
@@ -97,53 +121,24 @@ namespace Underwater
             }
         }
 
-        protected abstract void TickAlive();
-
-        private void Die()
+        protected bool HasDirective(CreatureDirectiveMode mode)
         {
-            IsAlive = false;
-            Director.UnregisterCreature(this);
-
-            Collider collider = GetComponent<Collider>();
-
-            if (collider != null)
-            {
-                collider.enabled = false;
-            }
-
-            Destroy(gameObject, 4f);
+            return DirectiveMode == mode;
         }
 
-        private void TrackMaterial(Material material, Color emissionColor)
+        protected void RefreshDirectiveLifetime()
         {
-            runtimeMaterials.Add(material);
-            baseEmissionColors.Add(emissionColor);
-
-            if (material.HasProperty("_EmissionColor"))
-            {
-                material.EnableKeyword("_EMISSION");
-                material.SetColor("_EmissionColor", emissionColor);
-            }
-        }
-
-        private void UpdateRuntimeMaterialState()
-        {
-            if (runtimeMaterials.Count == 0)
+            if (directiveMode == CreatureDirectiveMode.Autonomous || directiveExpiresAt <= 0f)
             {
                 return;
             }
 
-            for (int i = 0; i < runtimeMaterials.Count; i++)
+            if (Time.time >= directiveExpiresAt)
             {
-                Material material = runtimeMaterials[i];
-                Color baseEmission = baseEmissionColors[i];
-                Color flashEmission = Color.Lerp(baseEmission, Color.white * 1.6f, hitFlash);
-
-                if (material.HasProperty("_EmissionColor"))
-                {
-                    material.SetColor("_EmissionColor", flashEmission);
-                }
+                ClearDirective();
             }
         }
+
+        protected abstract void TickBehavior();
     }
 }

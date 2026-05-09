@@ -20,32 +20,85 @@ namespace Underwater
             seed = Random.Range(0f, 100f);
 
             BuildVisuals(bodyMaterial, accentMaterial);
-            InitializeBase(director, CreatureKind.Lobster, 24f);
+            InitializeBase(director, CreatureKind.Lobster);
 
             SphereCollider collider = gameObject.AddComponent<SphereCollider>();
             collider.radius = 0.78f;
             collider.center = new Vector3(0f, 0.28f, 0f);
         }
 
-        protected override void TickAlive()
+        protected override void TickBehavior()
         {
             scuttleTimer -= Time.deltaTime;
 
             if (scuttleTimer <= 0f || Vector3.Distance(transform.position, scuttleTarget) < 1.2f)
             {
-                Vector2 randomCircle = Random.insideUnitCircle * 5f;
-                scuttleTarget = homePosition + new Vector3(randomCircle.x, 0f, randomCircle.y);
-                scuttleTarget = Director.ClampPoint(scuttleTarget, 4f);
-                scuttleTarget.y = Director.SeaFloorY + Random.Range(0.45f, 0.95f);
-                scuttleTimer = Random.Range(1.8f, 3.4f);
+                UpdateScuttleTarget();
             }
 
             Vector3 scuttleOffset = transform.right * Mathf.Sin(Time.time * 5.2f + seed) * 0.42f;
-            Vector3 desiredVelocity = ((scuttleTarget + scuttleOffset) - transform.position).normalized * 2.2f;
+            float speed = HasDirective(CreatureDirectiveMode.PressurePlayer) ? 3.1f : 2.2f;
+            Vector3 desiredVelocity = ((scuttleTarget + scuttleOffset) - transform.position).normalized * speed;
 
             AddBuoyancyBand(Director.SeaFloorY + 0.8f, 0.45f);
             MoveCreature(desiredVelocity, 8.5f, 4.6f, 1.1f);
             AnimateVisuals();
+        }
+
+        private void UpdateScuttleTarget()
+        {
+            Vector3 directiveCenter = homePosition;
+            float roamRadius = 5f;
+            float minTimer = 1.8f;
+            float maxTimer = 3.4f;
+
+            switch (DirectiveMode)
+            {
+                case CreatureDirectiveMode.MoveToPoint:
+                    directiveCenter = DirectiveTarget;
+                    roamRadius = 1.25f;
+                    minTimer = 0.8f;
+                    maxTimer = 1.4f;
+                    break;
+                case CreatureDirectiveMode.GuardZone:
+                    directiveCenter = DirectiveTarget;
+                    roamRadius = Mathf.Max(1.5f, DirectiveRadius);
+                    minTimer = 1.1f;
+                    maxTimer = 1.9f;
+                    break;
+                case CreatureDirectiveMode.HoldPosition:
+                    directiveCenter = DirectiveTarget;
+                    roamRadius = 0.4f;
+                    minTimer = 0.5f;
+                    maxTimer = 0.9f;
+                    break;
+                case CreatureDirectiveMode.PressurePlayer:
+                    directiveCenter = Director.Player != null ? Director.Player.transform.position : transform.position;
+                    roamRadius = 1.8f;
+                    minTimer = 0.45f;
+                    maxTimer = 0.9f;
+                    break;
+                case CreatureDirectiveMode.RetreatFromPlayer:
+                    Vector3 away = transform.position;
+
+                    if (Director.Player != null)
+                    {
+                        Vector3 retreatDirection = (transform.position - Director.Player.transform.position).normalized;
+                        away += retreatDirection * Mathf.Max(DirectiveRadius, 6f);
+                    }
+
+                    directiveCenter = away;
+                    roamRadius = 1.2f;
+                    minTimer = 0.6f;
+                    maxTimer = 1.1f;
+                    break;
+            }
+
+            Vector2 randomCircle = Random.insideUnitCircle * roamRadius;
+            scuttleTarget = directiveCenter + new Vector3(randomCircle.x, 0f, randomCircle.y);
+            scuttleTarget = Director.ClampPoint(scuttleTarget, 4f);
+            scuttleTarget.y = Director.SeaFloorY + Random.Range(0.45f, 0.95f);
+            scuttleTimer = Random.Range(minTimer, maxTimer);
         }
 
         private void BuildVisuals(Material bodyMaterial, Material accentMaterial)
@@ -55,8 +108,8 @@ namespace Underwater
             ModelRoot.localPosition = Vector3.zero;
             ModelRoot.localRotation = Quaternion.identity;
 
-            Material shellMaterial = CreateRuntimeMaterial(bodyMaterial, new Color(0.22f, 0.05f, 0.03f));
-            Material highlightMaterial = CreateRuntimeMaterial(accentMaterial, new Color(0.28f, 0.11f, 0.05f));
+            Material shellMaterial = CreateRuntimeMaterial(bodyMaterial);
+            Material highlightMaterial = CreateRuntimeMaterial(accentMaterial);
 
             GameObject body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
             body.name = "Body";

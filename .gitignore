@@ -33,7 +33,7 @@
 .DS_Store
 Thumbs.db
 .gradle/
+node_modules/
 
 # Crash reports
 sysinfo.txt
-

@@ -23,7 +23,7 @@ namespace Underwater
             cruiseHeight = Random.Range(director.SeaFloorY + 6f, director.PlayBounds.max.y - 2.5f);
 
             BuildVisuals(bodyMaterial, accentMaterial);
-            InitializeBase(director, CreatureKind.Shark, 46f);
+            InitializeBase(director, CreatureKind.Shark);
 
             CapsuleCollider collider = gameObject.AddComponent<CapsuleCollider>();
             collider.direction = 0;
@@ -32,17 +32,13 @@ namespace Underwater
             collider.height = 3.8f;
         }
 
-        protected override void TickAlive()
+        protected override void TickBehavior()
         {
             driftTimer -= Time.deltaTime;
 
             if (driftTimer <= 0f || Vector3.Distance(transform.position, driftTarget) < 2.4f)
             {
-                Vector2 circle = Random.insideUnitCircle * orbitRadius;
-                driftTarget = homePosition + new Vector3(circle.x, 0f, circle.y);
-                driftTarget = Director.ClampPoint(driftTarget, 6f);
-                driftTarget.y = cruiseHeight + Mathf.Sin(Time.time * 0.7f + seed) * 1.5f;
-                driftTimer = Random.Range(2.4f, 4.8f);
+                UpdateDriftTarget();
             }
 
             Vector3 wave = new Vector3(
@@ -50,11 +46,78 @@ namespace Underwater
                 Mathf.Sin(Time.time * 0.95f + seed * 0.8f) * 0.6f,
                 Mathf.Cos(Time.time * 0.72f + seed) * 1.1f);
 
-            Vector3 desiredVelocity = (driftTarget + wave - transform.position).normalized * 4.2f;
+            float speed = HasDirective(CreatureDirectiveMode.PressurePlayer) ? 5.6f : 4.2f;
+            Vector3 desiredVelocity = (driftTarget + wave - transform.position).normalized * speed;
 
             AddBuoyancyBand(cruiseHeight, 0.2f);
             MoveCreature(desiredVelocity, 5.5f, 2.4f, 1.4f);
             AnimateVisuals();
+        }
+
+        private void UpdateDriftTarget()
+        {
+            Vector3 center = homePosition;
+            float localRadius = orbitRadius;
+            float minTimer = 2.4f;
+            float maxTimer = 4.8f;
+            float targetHeight = cruiseHeight;
+
+            switch (DirectiveMode)
+            {
+                case CreatureDirectiveMode.MoveToPoint:
+                    center = DirectiveTarget;
+                    localRadius = 1.8f;
+                    minTimer = 0.8f;
+                    maxTimer = 1.5f;
+                    targetHeight = DirectiveTarget.y;
+                    break;
+                case CreatureDirectiveMode.GuardZone:
+                    center = DirectiveTarget;
+                    localRadius = Mathf.Max(2f, DirectiveRadius);
+                    minTimer = 1.2f;
+                    maxTimer = 2.1f;
+                    targetHeight = DirectiveTarget.y;
+                    break;
+                case CreatureDirectiveMode.HoldPosition:
+                    center = DirectiveTarget;
+                    localRadius = 0.9f;
+                    minTimer = 0.5f;
+                    maxTimer = 1f;
+                    targetHeight = DirectiveTarget.y;
+                    break;
+                case CreatureDirectiveMode.PressurePlayer:
+                    center = Director.Player != null ? Director.Player.transform.position : transform.position;
+                    localRadius = Mathf.Max(2.4f, DirectiveRadius);
+                    minTimer = 0.55f;
+                    maxTimer = 1.1f;
+                    targetHeight = center.y + 0.4f;
+                    break;
+                case CreatureDirectiveMode.RetreatFromPlayer:
+                    Vector3 away = transform.position;
+
+                    if (Director.Player != null)
+                    {
+                        Vector3 retreatDirection = (transform.position - Director.Player.transform.position).normalized;
+                        away += retreatDirection * Mathf.Max(DirectiveRadius, 10f);
+                    }
+
+                    center = away;
+                    localRadius = 2.2f;
+                    minTimer = 0.65f;
+                    maxTimer = 1.35f;
+                    targetHeight = center.y;
+                    break;
+            }
+
+            Vector2 circle = Random.insideUnitCircle * localRadius;
+            driftTarget = center + new Vector3(circle.x, 0f, circle.y);
+            driftTarget = Director.ClampPoint(driftTarget, 6f);
+            driftTarget.y = Mathf.Clamp(
+                targetHeight + Mathf.Sin(Time.time * 0.7f + seed) * 1.5f,
+                Director.SeaFloorY + 2.5f,
+                Director.PlayBounds.max.y - 1.5f);
+            driftTimer = Random.Range(minTimer, maxTimer);
+            cruiseHeight = Mathf.Lerp(cruiseHeight, driftTarget.y, 0.45f);
         }
 
         private void BuildVisuals(Material bodyMaterial, Material accentMaterial)
@@ -64,8 +127,8 @@ namespace Underwater
             ModelRoot.localPosition = Vector3.zero;
             ModelRoot.localRotation = Quaternion.identity;
 
-            Material sharkBody = CreateRuntimeMaterial(bodyMaterial, new Color(0.04f, 0.11f, 0.16f));
-            Material sharkAccent = CreateRuntimeMaterial(accentMaterial, new Color(0.08f, 0.16f, 0.2f));
+            Material sharkBody = CreateRuntimeMaterial(bodyMaterial);
+            Material sharkAccent = CreateRuntimeMaterial(accentMaterial);
 
             GameObject body = GameObject.CreatePrimitive(PrimitiveType.Capsule);
             body.name = "Body";
