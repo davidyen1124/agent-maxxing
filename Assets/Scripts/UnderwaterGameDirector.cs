@@ -641,7 +641,7 @@ namespace Underwater
                 {
                     position = SerializableVector3.FromVector3(Player != null ? Player.transform.position : Vector3.zero),
                     forward = SerializableVector3.FromVector3(Player != null ? Player.transform.forward : Vector3.forward),
-                    boostNormalized = Player != null ? Player.BoostNormalized : 0f,
+                    boostNormalized = Player != null ? Player.SprintEnergyNormalized : 0f,
                     hasPointerLock = Player != null && Player.HasPointerLock
                 },
                 threads = threadSnapshots.ToArray(),
@@ -1779,7 +1779,7 @@ namespace Underwater
             camera.nearClipPlane = 0.05f;
 
             Player = playerObject.AddComponent<UnderwaterPlayerController>();
-            Player.Initialize(this, controller, viewPivotObject.transform, camera);
+            Player.Initialize(this, controller, viewPivotObject.transform);
         }
 
         private static float NormalizePitch(float pitch)
@@ -1799,7 +1799,7 @@ namespace Underwater
                 : PlayBounds.center;
 
             position = ClampPoint(position, 4f);
-            position.y = Mathf.Max(position.y, GetSurfaceY(position) + 2.2f);
+            position.y = GetSurfaceY(position) + 0.08f;
             return position;
         }
 
