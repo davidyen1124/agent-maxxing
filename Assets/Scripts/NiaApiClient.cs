@@ -11,17 +11,20 @@ namespace Underwater
     internal sealed class NiaApiClient
     {
         private const string DefaultBaseUrl = "https://apigcp.trynia.ai/v2";
+        public const string DefaultSearchMode = "universal";
 
         private readonly string baseUrl;
         private readonly string apiKey;
+        private readonly string defaultSearchMode;
         private readonly string[] repositories;
         private readonly string[] dataSources;
         private readonly int maxTokens;
 
-        public NiaApiClient(string baseUrl, string apiKey, string[] repositories, string[] dataSources, int maxTokens)
+        public NiaApiClient(string baseUrl, string apiKey, string defaultSearchMode, string[] repositories, string[] dataSources, int maxTokens)
         {
             this.baseUrl = NormalizeBaseUrl(baseUrl);
             this.apiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim();
+            this.defaultSearchMode = NormalizeSearchMode(defaultSearchMode);
             this.repositories = CleanFilters(repositories);
             this.dataSources = CleanFilters(dataSources);
             this.maxTokens = Mathf.Clamp(maxTokens, 100, 100000);
@@ -29,7 +32,21 @@ namespace Underwater
 
         public bool HasApiKey => !string.IsNullOrWhiteSpace(ReadApiKey());
 
+        public string ConfigurationKey => string.Join(
+            "|",
+            baseUrl,
+            string.IsNullOrWhiteSpace(apiKey) ? "no-key" : "key",
+            defaultSearchMode,
+            maxTokens.ToString(),
+            string.Join(",", repositories),
+            string.Join(",", dataSources));
+
         public async Task<NiaSearchResult> QueryAsync(string query, CancellationToken token)
+        {
+            return await QueryAsync(query, null, token);
+        }
+
+        public async Task<NiaSearchResult> QueryAsync(string query, string mode, CancellationToken token)
         {
             string apiKey = ReadApiKey();
 
@@ -43,7 +60,8 @@ namespace Underwater
                 throw new ArgumentException("Nia query cannot be empty.", nameof(query));
             }
 
-            Dictionary<string, object> payload = BuildSearchPayload(query.Trim());
+            string searchMode = NormalizeSearchMode(string.IsNullOrWhiteSpace(mode) ? defaultSearchMode : mode);
+            Dictionary<string, object> payload = BuildSearchPayload(query.Trim(), searchMode);
             string body = AquariumDirectorBridge.MiniJson.Serialize(payload);
             string responseBody = await PostJsonAsync($"{baseUrl}/search", body, apiKey, token);
             Dictionary<string, object> response = AquariumDirectorBridge.MiniJson.Deserialize(responseBody) as Dictionary<string, object>;
@@ -67,8 +85,44 @@ namespace Underwater
             };
         }
 
-        private Dictionary<string, object> BuildSearchPayload(string query)
+        private Dictionary<string, object> BuildSearchPayload(string query, string mode)
         {
+            if (string.Equals(mode, "web", StringComparison.Ordinal))
+            {
+                return new Dictionary<string, object>
+                {
+                    ["mode"] = "web",
+                    ["query"] = query,
+                    ["num_results"] = 5
+                };
+            }
+
+            if (string.Equals(mode, "deep", StringComparison.Ordinal))
+            {
+                return new Dictionary<string, object>
+                {
+                    ["mode"] = "deep",
+                    ["query"] = query,
+                    ["verbose"] = false
+                };
+            }
+
+            if (string.Equals(mode, "universal", StringComparison.Ordinal))
+            {
+                return new Dictionary<string, object>
+                {
+                    ["mode"] = "universal",
+                    ["query"] = query,
+                    ["top_k"] = 8,
+                    ["include_repos"] = true,
+                    ["include_docs"] = true,
+                    ["include_huggingface_datasets"] = false,
+                    ["compress_output"] = true,
+                    ["sources_for_answer"] = 4,
+                    ["max_tokens"] = maxTokens
+                };
+            }
+
             Dictionary<string, object> payload = new Dictionary<string, object>
             {
                 ["mode"] = "query",
@@ -139,12 +193,21 @@ namespace Underwater
             return ReadString(response, "answer")
                 ?? ReadString(response, "response")
                 ?? ReadString(response, "summary")
+                ?? ReadString(response, "text")
+                ?? ReadString(response, "content")
+                ?? ReadString(response, "compressed_output")
                 ?? ReadString(response, "result", "answer")
                 ?? ReadString(response, "result", "response")
                 ?? ReadString(response, "result", "summary")
+                ?? ReadString(response, "result", "text")
+                ?? ReadString(response, "result", "content")
+                ?? ReadString(response, "result", "compressed_output")
                 ?? ReadString(response, "data", "answer")
                 ?? ReadString(response, "data", "response")
-                ?? FindFirstStringByKey(response, new HashSet<string> { "answer", "response", "summary", "final" }, 6);
+                ?? ReadString(response, "data", "summary")
+                ?? ReadString(response, "data", "text")
+                ?? ReadString(response, "data", "content")
+                ?? FindFirstStringByKey(response, new HashSet<string> { "answer", "response", "summary", "final", "text", "content", "compressed_output", "output" }, 6);
         }
 
         private static string[] ReadSourceLabels(Dictionary<string, object> response)
@@ -286,6 +349,27 @@ namespace Underwater
             }
 
             return cleaned.ToArray();
+        }
+
+        private static string NormalizeSearchMode(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return DefaultSearchMode;
+            }
+
+            string normalized = value.Trim().ToLowerInvariant();
+
+            switch (normalized)
+            {
+                case "query":
+                case "universal":
+                case "web":
+                case "deep":
+                    return normalized;
+                default:
+                    return DefaultSearchMode;
+            }
         }
 
         private static string Shorten(string text, int maxLength)
