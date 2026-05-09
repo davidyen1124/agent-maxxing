@@ -158,12 +158,14 @@ namespace Underwater
         private void HandleInteraction()
         {
             bool spawnPressed = false;
-            bool niaInsightPressed = false;
+            bool voicePressed = false;
+            bool voiceReleased = false;
 
             if (Keyboard.current != null)
             {
                 spawnPressed = Keyboard.current.eKey.wasPressedThisFrame;
-                niaInsightPressed = Keyboard.current.rKey.wasPressedThisFrame;
+                voicePressed = Keyboard.current.vKey.wasPressedThisFrame;
+                voiceReleased = Keyboard.current.vKey.wasReleasedThisFrame;
             }
 
             if (spawnPressed)
@@ -171,9 +173,14 @@ namespace Underwater
                 director.RequestWorkThreadSpawnFromPlayer();
             }
 
-            if (niaInsightPressed)
+            if (voicePressed)
             {
-                director.RequestNiaReefInsightFromPlayer();
+                director.BeginRealtimeVoiceQuestionFromPlayer();
+            }
+
+            if (voiceReleased)
+            {
+                director.EndRealtimeVoiceQuestionFromPlayer();
             }
         }
     }

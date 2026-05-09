@@ -13,17 +13,15 @@ namespace Underwater
         private const string DefaultBaseUrl = "https://apigcp.trynia.ai/v2";
 
         private readonly string baseUrl;
-        private readonly string apiKeyEnvironmentVariable;
+        private readonly string apiKey;
         private readonly string[] repositories;
         private readonly string[] dataSources;
         private readonly int maxTokens;
 
-        public NiaApiClient(string baseUrl, string apiKeyEnvironmentVariable, string[] repositories, string[] dataSources, int maxTokens)
+        public NiaApiClient(string baseUrl, string apiKey, string[] repositories, string[] dataSources, int maxTokens)
         {
             this.baseUrl = NormalizeBaseUrl(baseUrl);
-            this.apiKeyEnvironmentVariable = string.IsNullOrWhiteSpace(apiKeyEnvironmentVariable)
-                ? "NIA_API_KEY"
-                : apiKeyEnvironmentVariable.Trim();
+            this.apiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim();
             this.repositories = CleanFilters(repositories);
             this.dataSources = CleanFilters(dataSources);
             this.maxTokens = Mathf.Clamp(maxTokens, 100, 100000);
@@ -37,7 +35,7 @@ namespace Underwater
 
             if (string.IsNullOrWhiteSpace(apiKey))
             {
-                throw new InvalidOperationException($"Set {apiKeyEnvironmentVariable} before launching Unity to enable Nia search.");
+                throw new InvalidOperationException($"Set niaApiKey in {UnderwaterUserSettings.RelativePath} to enable Nia search.");
             }
 
             if (string.IsNullOrWhiteSpace(query))
@@ -259,7 +257,7 @@ namespace Underwater
 
         private string ReadApiKey()
         {
-            return Environment.GetEnvironmentVariable(apiKeyEnvironmentVariable);
+            return apiKey;
         }
 
         private static string NormalizeBaseUrl(string value)

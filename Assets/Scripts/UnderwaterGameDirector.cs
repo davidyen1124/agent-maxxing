@@ -16,11 +16,10 @@ namespace Underwater
         private const string ReefTaskTitlePrefix = "Underwater reef task ";
         private const string ReefTaskCounterPrefsKey = "Underwater.ReefTask.NextThreadNumber";
 
-        [SerializeField] private string niaBaseUrl = "https://apigcp.trynia.ai/v2";
-        [SerializeField] private string niaApiKeyEnvironmentVariable = "NIA_API_KEY";
-        [SerializeField] private string[] niaRepositories = Array.Empty<string>();
-        [SerializeField] private string[] niaDataSources = Array.Empty<string>();
-        [SerializeField] private int niaMaxTokens = 900;
+        [SerializeField] private string defaultOpenAiRealtimeModel = "gpt-realtime-2";
+        [SerializeField] private string defaultOpenAiRealtimeVoice = "marin";
+        [SerializeField] private int defaultVoiceSampleRate = 24000;
+        [SerializeField] private float defaultVoiceMaxCaptureSeconds = 8f;
 
         private readonly Dictionary<string, ThreadPetAI> activeThreads = new Dictionary<string, ThreadPetAI>();
         private readonly Dictionary<string, ArchivedThreadPet> archivedPets = new Dictionary<string, ArchivedThreadPet>();
@@ -33,6 +32,8 @@ namespace Underwater
         private GUIStyle loadingStatusStyle;
         private GUIStyle hudLabelStyle;
         private GUIStyle hudStrongStyle;
+        private GUIStyle niaHudStatusStyle;
+        private GUIStyle niaHudResultStyle;
 
         private Material reefMaterial;
         private Material kelpMaterial;
@@ -40,8 +41,11 @@ namespace Underwater
         private AquariumDirectorBridge aquariumBridge;
         private CodexPetCatalog petCatalog;
         private Terrain[] sceneTerrains = Array.Empty<Terrain>();
-        private NiaApiClient niaClient;
+        private AudioSource niaVoiceAudioSource;
+        private UnderwaterUserSettings apiSettings;
+        private OpenAIRealtimeClient realtimeClient;
         private Coroutine worldSyncRoutine;
+        private Coroutine niaVoiceCaptureRoutine;
         private QueuedWorldSync queuedWorldSync;
         private int snapshotSequence;
         private string bridgeState = "offline";
@@ -52,8 +56,10 @@ namespace Underwater
         private bool workThreadSpawnInFlight;
         private int spawnedWorkThreadCount;
         private string workThreadStatusLine = "Codex work thread spawner ready";
-        private bool niaSearchInFlight;
-        private string niaStatusLine = "Nia reef oracle ready";
+        private bool niaVoiceInFlight;
+        private bool niaVoiceStopRequested;
+        private string niaVoiceDeviceName;
+        private string niaStatusLine = "Realtime voice ready";
         private string lastNiaInsight = string.Empty;
         private bool worldSyncLoading;
         private float worldSyncProgress;
@@ -108,7 +114,7 @@ namespace Underwater
             }
 
             CreatePlayer();
-            niaClient = new NiaApiClient(niaBaseUrl, niaApiKeyEnvironmentVariable, niaRepositories, niaDataSources, niaMaxTokens);
+            ReloadApiSettings();
             AttachAquariumBridge(false);
             StartCoroutine(LoadCodexPetsThenAttachBridge());
         }
@@ -120,6 +126,11 @@ namespace Underwater
 
         private void OnDestroy()
         {
+            if (!string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
+            {
+                Microphone.End(niaVoiceDeviceName);
+            }
+
             if (Instance == this)
             {
                 Instance = null;
@@ -454,32 +465,61 @@ namespace Underwater
             _ = CreateWorkThreadFromWorldAsync(title, prompt, nextThreadNumber);
         }
 
-        public void RequestNiaReefInsightFromPlayer()
+        public void BeginRealtimeVoiceQuestionFromPlayer()
         {
             if (startupLoading)
             {
-                SetNiaStatus("Nia will be ready after the reef finishes loading.");
+                SetNiaStatus("Realtime voice will be ready after the reef finishes loading.");
                 return;
             }
 
-            if (niaSearchInFlight)
+            if (niaVoiceCaptureRoutine != null && !string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
             {
-                SetNiaStatus("Nia is already reading the reef.");
                 return;
             }
 
-            niaClient ??= new NiaApiClient(niaBaseUrl, niaApiKeyEnvironmentVariable, niaRepositories, niaDataSources, niaMaxTokens);
-
-            if (!niaClient.HasApiKey)
+            if (niaVoiceInFlight)
             {
-                SetNiaStatus($"Set {niaApiKeyEnvironmentVariable} before launching Unity to enable Nia.");
+                SetNiaStatus("Realtime is already answering.");
                 return;
             }
 
-            niaSearchInFlight = true;
-            lastNiaInsight = string.Empty;
-            SetNiaStatus("Asking Nia for a grounded reef read...");
-            _ = RequestNiaReefInsightAsync();
+            ReloadApiSettings();
+
+            if (!realtimeClient.HasApiKey)
+            {
+                SetNiaStatus($"Set openAiApiKey in {UnderwaterUserSettings.RelativePath}.");
+                return;
+            }
+
+            if (Microphone.devices == null || Microphone.devices.Length == 0)
+            {
+                SetNiaStatus("No microphone device is available.");
+                return;
+            }
+
+            niaVoiceStopRequested = false;
+            niaVoiceCaptureRoutine = StartCoroutine(CaptureRealtimeVoiceQuestion());
+        }
+
+        public void EndRealtimeVoiceQuestionFromPlayer()
+        {
+            if (niaVoiceCaptureRoutine == null || string.IsNullOrEmpty(niaVoiceDeviceName) || !Microphone.IsRecording(niaVoiceDeviceName))
+            {
+                return;
+            }
+
+            niaVoiceStopRequested = true;
+            Microphone.End(niaVoiceDeviceName);
+            SetNiaStatus("Sending your voice question to Realtime...");
+        }
+
+        private void ReloadApiSettings()
+        {
+            apiSettings = UnderwaterUserSettings.Load();
+            string openAiRealtimeModel = apiSettings.OpenAiRealtimeModelOr(defaultOpenAiRealtimeModel);
+
+            realtimeClient = new OpenAIRealtimeClient(apiSettings.openAiApiKey, openAiRealtimeModel);
         }
 
         public AquariumDirectorSnapshot CreateSnapshot()
@@ -682,6 +722,21 @@ namespace Underwater
                 fontStyle = FontStyle.Bold,
                 normal = { textColor = new Color(0.9f, 1f, 0.98f) }
             };
+
+            niaHudStatusStyle = new GUIStyle(hudLabelStyle)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 13,
+                normal = { textColor = new Color(0.7f, 0.94f, 1f) }
+            };
+
+            niaHudResultStyle = new GUIStyle(hudStrongStyle)
+            {
+                alignment = TextAnchor.UpperCenter,
+                fontSize = 15,
+                wordWrap = true,
+                normal = { textColor = new Color(0.95f, 1f, 0.98f) }
+            };
         }
 
         private static Texture2D CreateRoundedRectTexture(int width, int height, float radius, Color fillColor, Color borderColor, float borderWidth)
@@ -811,13 +866,10 @@ namespace Underwater
 
         private void DrawStatusHud()
         {
-            string insight = string.IsNullOrWhiteSpace(lastNiaInsight) ? niaStatusLine : lastNiaInsight;
-            float width = Mathf.Clamp(Screen.width - 36f, 300f, 460f);
-            float height = string.IsNullOrWhiteSpace(insight) ? 86f : 122f;
-            Rect panelRect = new Rect(18f, 18f, width, height);
+            float width = Mathf.Min(460f, Mathf.Max(260f, Screen.width - 36f));
+            Rect panelRect = new Rect(18f, Mathf.Max(18f, Screen.height - 84f), width, 66f);
             Rect bridgeRect = new Rect(panelRect.x + 10f, panelRect.y + 10f, panelRect.width - 20f, 22f);
             Rect threadRect = new Rect(panelRect.x + 10f, panelRect.y + 34f, panelRect.width - 20f, 22f);
-            Rect niaRect = new Rect(panelRect.x + 10f, panelRect.y + 58f, panelRect.width - 20f, 50f);
             Color previousColor = GUI.color;
 
             GUI.color = new Color(0.01f, 0.07f, 0.1f, 0.72f);
@@ -828,7 +880,33 @@ namespace Underwater
 
             GUI.Label(bridgeRect, Shorten(directorStatusLine, 80), hudLabelStyle);
             GUI.Label(threadRect, Shorten(nearestThreadTitle, 42) + " - " + Shorten(nearestThreadPhase, 42), hudStrongStyle);
-            GUI.Label(niaRect, Shorten(insight, 160), hudLabelStyle);
+            DrawNiaVoiceHud();
+        }
+
+        private void DrawNiaVoiceHud()
+        {
+            string status = Shorten(niaStatusLine, 96);
+            string result = CleanHudText(lastNiaInsight, 180);
+            bool hasResult = !string.IsNullOrWhiteSpace(result);
+            float width = Mathf.Min(640f, Mathf.Max(280f, Screen.width - 36f));
+            float height = hasResult ? 106f : 58f;
+            Rect panelRect = new Rect((Screen.width - width) * 0.5f, 18f, width, height);
+            Rect statusRect = new Rect(panelRect.x + 14f, panelRect.y + 10f, panelRect.width - 28f, 22f);
+            Rect resultRect = new Rect(panelRect.x + 18f, panelRect.y + 38f, panelRect.width - 36f, panelRect.height - 46f);
+            Color previousColor = GUI.color;
+
+            GUI.color = new Color(0.01f, 0.07f, 0.1f, 0.76f);
+            GUI.DrawTexture(panelRect, Texture2D.whiteTexture);
+            GUI.color = new Color(0.24f, 0.9f, 0.98f, 0.44f);
+            GUI.DrawTexture(new Rect(panelRect.x, panelRect.yMax - 2f, panelRect.width, 2f), Texture2D.whiteTexture);
+            GUI.color = previousColor;
+
+            GUI.Label(statusRect, status, niaHudStatusStyle);
+
+            if (hasResult)
+            {
+                GUI.Label(resultRect, result, niaHudResultStyle);
+            }
         }
 
         private static bool ShouldDrawBubbleMessage(string message)
@@ -981,12 +1059,93 @@ namespace Underwater
             return prompt.ToString();
         }
 
-        private string BuildNiaInsightPrompt()
+        private IEnumerator CaptureRealtimeVoiceQuestion()
+        {
+            niaVoiceInFlight = true;
+            lastNiaInsight = string.Empty;
+            niaVoiceDeviceName = Microphone.devices[0];
+            int configuredSampleRate = apiSettings != null
+                ? apiSettings.VoiceSampleRateOr(defaultVoiceSampleRate)
+                : defaultVoiceSampleRate;
+            float configuredMaxCaptureSeconds = apiSettings != null
+                ? apiSettings.VoiceMaxCaptureSecondsOr(defaultVoiceMaxCaptureSeconds)
+                : defaultVoiceMaxCaptureSeconds;
+            int sampleRate = Mathf.Clamp(configuredSampleRate, 8000, 48000);
+            int maxSeconds = Mathf.Clamp(Mathf.CeilToInt(configuredMaxCaptureSeconds), 2, 20);
+            AudioClip clip = Microphone.Start(niaVoiceDeviceName, false, maxSeconds, sampleRate);
+            float startedAt = Time.realtimeSinceStartup;
+            int recordedSamples = 0;
+
+            SetNiaStatus($"Listening on {niaVoiceDeviceName}. Hold V to record.");
+
+            while (!niaVoiceStopRequested && Microphone.IsRecording(niaVoiceDeviceName) && Time.realtimeSinceStartup - startedAt < maxSeconds)
+            {
+                recordedSamples = Mathf.Max(recordedSamples, Microphone.GetPosition(niaVoiceDeviceName));
+                yield return null;
+            }
+
+            if (Microphone.IsRecording(niaVoiceDeviceName))
+            {
+                recordedSamples = Mathf.Max(recordedSamples, Microphone.GetPosition(niaVoiceDeviceName));
+                Microphone.End(niaVoiceDeviceName);
+            }
+
+            if (recordedSamples <= 0 && clip != null)
+            {
+                recordedSamples = Mathf.Min(clip.samples, Mathf.RoundToInt((Time.realtimeSinceStartup - startedAt) * sampleRate));
+            }
+
+            niaVoiceCaptureRoutine = null;
+
+            if (clip == null || recordedSamples <= sampleRate / 4)
+            {
+                niaVoiceInFlight = false;
+                SetNiaStatus("I did not catch enough audio for a question.");
+                yield break;
+            }
+
+            float[] monoSamples = ExtractMonoSamples(clip, recordedSamples);
+            SetNiaStatus("Realtime is answering...");
+            _ = RequestRealtimeVoiceQuestionAsync(monoSamples, sampleRate);
+        }
+
+        private static float[] ExtractMonoSamples(AudioClip clip, int sampleCount)
+        {
+            int channels = Mathf.Max(1, clip.channels);
+            int clampedSampleCount = Mathf.Clamp(sampleCount, 0, clip.samples);
+            float[] interleaved = new float[clampedSampleCount * channels];
+            clip.GetData(interleaved, 0);
+
+            if (channels == 1)
+            {
+                return interleaved;
+            }
+
+            float[] mono = new float[clampedSampleCount];
+
+            for (int sample = 0; sample < clampedSampleCount; sample++)
+            {
+                float sum = 0f;
+                int offset = sample * channels;
+
+                for (int channel = 0; channel < channels; channel++)
+                {
+                    sum += interleaved[offset + channel];
+                }
+
+                mono[sample] = sum / channels;
+            }
+
+            return mono;
+        }
+
+        private string BuildRealtimeAnswerInstructions()
         {
             StringBuilder prompt = new StringBuilder();
-            prompt.Append("You are the Nia-backed knowledge layer for a Unity game named Underwater. ");
-            prompt.Append("Use any indexed project, documentation, or web context available to give one grounded, practical next step. ");
-            prompt.Append("Keep the answer under 35 words and avoid generic encouragement.");
+            prompt.Append("You are the voice assistant inside a Unity game named Underwater. ");
+            prompt.Append("Answer the player's spoken question directly. ");
+            prompt.Append("Keep the spoken answer under 45 words unless the player asks for more detail. ");
+            prompt.Append("Be concrete, conversational, and do not mention transcription.");
             prompt.AppendLine();
             prompt.AppendLine();
             prompt.Append("Current world state: ");
@@ -1000,30 +1159,57 @@ namespace Underwater
             return prompt.ToString();
         }
 
-        private async Task RequestNiaReefInsightAsync()
+        private async Task RequestRealtimeVoiceQuestionAsync(float[] monoSamples, int sampleRate)
         {
             try
             {
-                NiaSearchResult result = await niaClient.QueryAsync(BuildNiaInsightPrompt(), CancellationToken.None);
-                niaSearchInFlight = false;
-                lastNiaInsight = CleanHudText(result.Answer, 180);
-
-                if (result.SourceLabels != null && result.SourceLabels.Length > 0)
-                {
-                    SetNiaStatus($"Nia cited {result.SourceLabels.Length} source(s).");
-                }
-                else
-                {
-                    SetNiaStatus("Nia answered from available context.");
-                }
+                string voice = apiSettings != null
+                    ? apiSettings.OpenAiRealtimeVoiceOr(defaultOpenAiRealtimeVoice)
+                    : defaultOpenAiRealtimeVoice;
+                RealtimeAudioResult result = await realtimeClient.AskQuestionAsync(
+                    monoSamples,
+                    sampleRate,
+                    BuildRealtimeAnswerInstructions(),
+                    voice,
+                    CancellationToken.None);
+                lastNiaInsight = CleanHudText(result.Transcript, 180);
+                PlayNiaAudio(result);
+                SetNiaStatus("Realtime answered.");
             }
             catch (Exception ex)
             {
-                niaSearchInFlight = false;
                 lastNiaInsight = string.Empty;
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                SetNiaStatus($"Nia unavailable: {Shorten(message, 96)}");
+                SetNiaStatus($"Voice question unavailable: {Shorten(message, 96)}");
             }
+            finally
+            {
+                niaVoiceInFlight = false;
+            }
+        }
+
+        private void PlayNiaAudio(RealtimeAudioResult audio)
+        {
+            if (audio == null || audio.Samples == null || audio.Samples.Length == 0)
+            {
+                return;
+            }
+
+            if (niaVoiceAudioSource == null)
+            {
+                Camera camera = Camera.main;
+                niaVoiceAudioSource = camera != null ? camera.gameObject.AddComponent<AudioSource>() : gameObject.AddComponent<AudioSource>();
+                niaVoiceAudioSource.playOnAwake = false;
+                niaVoiceAudioSource.loop = false;
+                niaVoiceAudioSource.spatialBlend = 0f;
+            }
+
+            int sampleRate = Mathf.Max(8000, audio.SampleRate);
+            AudioClip clip = AudioClip.Create("Realtime Voice Answer", audio.Samples.Length, 1, sampleRate, false);
+            clip.SetData(audio.Samples, 0);
+            niaVoiceAudioSource.Stop();
+            niaVoiceAudioSource.clip = clip;
+            niaVoiceAudioSource.Play();
         }
 
         private async Task CreateWorkThreadFromWorldAsync(string title, string prompt, int workThreadNumber)
@@ -1367,6 +1553,19 @@ namespace Underwater
                 cameraObject.tag = "MainCamera";
                 cameraObject.AddComponent<AudioListener>();
             }
+
+            Quaternion initialCameraRotation = camera.transform.rotation;
+
+            niaVoiceAudioSource = camera.GetComponent<AudioSource>();
+
+            if (niaVoiceAudioSource == null)
+            {
+                niaVoiceAudioSource = camera.gameObject.AddComponent<AudioSource>();
+            }
+
+            niaVoiceAudioSource.playOnAwake = false;
+            niaVoiceAudioSource.loop = false;
+            niaVoiceAudioSource.spatialBlend = 0f;
 
             Quaternion initialCameraRotation = camera.transform.rotation;
             GameObject playerObject = new GameObject("Player");
