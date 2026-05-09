@@ -92,6 +92,8 @@ namespace Underwater
 
         public float SeaFloorY => PlayBounds.min.y + 0.5f;
 
+        public bool UsesSceneTerrain => usingSceneTerrain;
+
         public UnderwaterPlayerController Player { get; private set; }
 
         public int ActiveThreadCount => activeThreads.Count;

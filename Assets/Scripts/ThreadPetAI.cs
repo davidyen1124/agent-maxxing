@@ -4,8 +4,14 @@ namespace Underwater
 {
     public sealed class ThreadPetAI : MonoBehaviour
     {
+        private const float TerrainGroundOffset = 0.65f;
+        private const float TerrainTargetArrivalDistance = 0.95f;
+        private const float TerrainSurfaceFollowSpeed = 12f;
+
         private UnderwaterGameDirector director;
         private CodexPetSpriteAnimator petAnimator;
+        private Transform modelRoot;
+        private Vector3 modelBaseLocalPosition;
         private Vector3 velocity;
         private Vector3 swimTarget;
         private Vector3 homePosition;
@@ -65,9 +71,12 @@ namespace Underwater
         {
             director = owningDirector;
             seed = Random.Range(0f, 100f);
-            transform.position = snapshot != null && snapshot.position != null
+            Vector3 startPosition = snapshot != null && snapshot.position != null
                 ? snapshot.position.ToVector3()
                 : director.GetRandomMidWaterPoint();
+            transform.position = ShouldUseTerrainGrounding()
+                ? ProjectToTerrainGround(startPosition)
+                : startPosition;
             homePosition = transform.position;
             swimTarget = transform.position;
             ConfigurePersonality();
@@ -83,11 +92,11 @@ namespace Underwater
             }
 
             petDefinition = pet;
-
-            Transform modelRoot = new GameObject("Model").transform;
+            modelRoot = new GameObject("Model").transform;
             modelRoot.SetParent(transform);
             modelRoot.localPosition = Vector3.zero;
             modelRoot.localRotation = Quaternion.identity;
+            modelBaseLocalPosition = modelRoot.localPosition;
 
             petAnimator = CodexPetSpriteAnimator.Create(
                 modelRoot,
@@ -120,7 +129,9 @@ namespace Underwater
 
             if (snapshot.position != null)
             {
-                homePosition = director.ClampPoint(snapshot.position.ToVector3(), 3f);
+                homePosition = ShouldUseTerrainGrounding()
+                    ? ProjectToTerrainGround(snapshot.position.ToVector3(), 3f)
+                    : director.ClampPoint(snapshot.position.ToVector3(), 3f);
             }
 
             petAnimator?.SetState(GetPetState());
@@ -145,6 +156,12 @@ namespace Underwater
         {
             UpdateChaosTimers();
             swimTimer -= Time.deltaTime;
+
+            if (ShouldUseTerrainGrounding())
+            {
+                UpdateGroundedMovement();
+                return;
+            }
 
             if (swimTimer <= 0f || Vector3.Distance(transform.position, swimTarget) < 1.8f)
             {
@@ -203,7 +220,7 @@ namespace Underwater
                 dashMultiplier = Random.Range(1.6f, 2.8f);
                 nextDashTimer = Random.Range(0.7f, 5.5f);
                 chaosImpulse = Random.insideUnitSphere * Random.Range(3f, 9f);
-                chaosImpulse.y = Random.Range(-2.5f, 4.5f);
+                chaosImpulse.y = ShouldUseTerrainGrounding() ? 0f : Random.Range(-2.5f, 4.5f);
                 moveMode = (ChaosMoveMode)Random.Range(0, 6);
                 PickNextTarget();
             }
@@ -227,7 +244,19 @@ namespace Underwater
                 }
                 else if (moveMode == ChaosMoveMode.ChaseCamera && Camera.main != null)
                 {
-                    focusPoint = Camera.main.transform.position + (Camera.main.transform.forward * Random.Range(4f, 11f));
+                    Vector3 cameraForward = Camera.main.transform.forward;
+
+                    if (ShouldUseTerrainGrounding())
+                    {
+                        cameraForward.y = 0f;
+
+                        if (cameraForward.sqrMagnitude < 0.0001f)
+                        {
+                            cameraForward = Camera.main.transform.forward;
+                        }
+                    }
+
+                    focusPoint = Camera.main.transform.position + (cameraForward.normalized * Random.Range(4f, 11f));
                     circle = Random.insideUnitCircle * Random.Range(1.2f, 5.5f);
                 }
                 else if (phase == "responding" || phase == "fresh")
@@ -241,20 +270,27 @@ namespace Underwater
             switch (moveMode)
             {
                 case ChaosMoveMode.DivePop:
-                    verticalOffset = Random.value > 0.5f ? Random.Range(3f, 7f) : Random.Range(-5f, -1.5f);
+                    verticalOffset = ShouldUseTerrainGrounding()
+                        ? 0f
+                        : Random.value > 0.5f ? Random.Range(3f, 7f) : Random.Range(-5f, -1.5f);
                     break;
                 case ChaosMoveMode.Spiral:
                     float spiralTime = Time.time * Random.Range(0.7f, 1.6f) + seed;
                     circle += new Vector2(Mathf.Cos(spiralTime), Mathf.Sin(spiralTime)) * Random.Range(2f, 6f);
-                    verticalOffset = Mathf.Sin(spiralTime * 1.3f) * Random.Range(1.5f, 4f);
+                    verticalOffset = ShouldUseTerrainGrounding()
+                        ? 0f
+                        : Mathf.Sin(spiralTime * 1.3f) * Random.Range(1.5f, 4f);
                     break;
                 case ChaosMoveMode.ZigZag:
                     circle = new Vector2(Mathf.Sign(Mathf.Sin(Time.time * 7f + seed)) * roamRadius, Random.Range(-roamRadius, roamRadius));
-                    verticalOffset = Random.Range(-3.5f, 3.5f);
+                    verticalOffset = ShouldUseTerrainGrounding() ? 0f : Random.Range(-3.5f, 3.5f);
                     break;
             }
 
-            swimTarget = director.ClampPoint(focusPoint + new Vector3(circle.x, verticalOffset, circle.y), 2f);
+            Vector3 target = focusPoint + new Vector3(circle.x, verticalOffset, circle.y);
+            swimTarget = ShouldUseTerrainGrounding()
+                ? ProjectToTerrainGround(target, 2f)
+                : director.ClampPoint(target, 2f);
             swimTimer = Random.Range(targetMinSeconds, Mathf.Max(targetMinSeconds + 0.2f, targetMaxSeconds));
         }
 
@@ -334,6 +370,79 @@ namespace Underwater
                 Quaternion targetRotation = Quaternion.LookRotation(velocity.normalized, Vector3.up);
                 transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * turnSpeed);
             }
+        }
+
+        private void UpdateGroundedMovement()
+        {
+            Vector3 horizontalOffset = swimTarget - transform.position;
+            horizontalOffset.y = 0f;
+
+            if (swimTimer <= 0f || horizontalOffset.sqrMagnitude < TerrainTargetArrivalDistance * TerrainTargetArrivalDistance)
+            {
+                PickNextTarget();
+                horizontalOffset = swimTarget - transform.position;
+                horizontalOffset.y = 0f;
+            }
+
+            Vector3 horizontalImpulse = new Vector3(chaosImpulse.x, 0f, chaosImpulse.z) * 0.25f;
+            Vector3 desiredVelocity = horizontalOffset.sqrMagnitude > 0.0001f
+                ? horizontalOffset.normalized * GetSwimSpeed()
+                : Vector3.zero;
+
+            MoveGroundedThread(desiredVelocity + horizontalImpulse, GetAcceleration(), 7.2f, 1.4f);
+            chaosImpulse = Vector3.Lerp(chaosImpulse, Vector3.zero, Time.deltaTime * 2.2f);
+            UpdateGroundedModelMotion();
+            petAnimator?.SetState(GetPetState());
+        }
+
+        private void MoveGroundedThread(Vector3 desiredVelocity, float acceleration, float turnSpeed, float clampPadding)
+        {
+            desiredVelocity.y = 0f;
+            Vector3 horizontalVelocity = new Vector3(velocity.x, 0f, velocity.z);
+            horizontalVelocity = Vector3.MoveTowards(horizontalVelocity, desiredVelocity, acceleration * Time.deltaTime);
+            velocity = horizontalVelocity;
+
+            Vector3 nextPosition = transform.position + (velocity * Time.deltaTime);
+            nextPosition = director.ClampPoint(nextPosition, clampPadding);
+            float groundY = director.GetSurfaceY(nextPosition) + TerrainGroundOffset;
+            nextPosition.y = Mathf.Abs(nextPosition.y - groundY) > 2f
+                ? groundY
+                : Mathf.Lerp(nextPosition.y, groundY, Time.deltaTime * TerrainSurfaceFollowSpeed);
+            transform.position = nextPosition;
+
+            if (velocity.sqrMagnitude > 0.06f)
+            {
+                Quaternion targetRotation = Quaternion.LookRotation(velocity.normalized, Vector3.up);
+                transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * turnSpeed);
+            }
+        }
+
+        private void UpdateGroundedModelMotion()
+        {
+            if (modelRoot == null)
+            {
+                return;
+            }
+
+            float bob = actionState == CodexPetAnimationState.Jumping && actionTimer > 0f
+                ? Mathf.Abs(Mathf.Sin(Time.time * 9f + seed)) * 0.24f
+                : Mathf.Sin(Time.time * 5.5f + seed) * Mathf.Clamp01(velocity.magnitude / 3f) * 0.04f;
+            modelRoot.localPosition = Vector3.Lerp(
+                modelRoot.localPosition,
+                modelBaseLocalPosition + (Vector3.up * bob),
+                Time.deltaTime * 8f);
+        }
+
+        private Vector3 ProjectToTerrainGround(Vector3 point, float clampPadding = 1.4f)
+        {
+            Vector3 clamped = director.ClampPoint(point, clampPadding);
+            clamped.y = director.GetSurfaceY(clamped) + TerrainGroundOffset;
+            return clamped;
+        }
+
+        private bool ShouldUseTerrainGrounding()
+        {
+            return director != null && director.UsesSceneTerrain;
         }
 
         private CodexPetAnimationState GetPetState()
