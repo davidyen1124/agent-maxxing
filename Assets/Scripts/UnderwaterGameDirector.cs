@@ -49,6 +49,18 @@ namespace Underwater
         private GUIStyle speechBubbleShadowStyle;
         private GUIStyle loadingTitleStyle;
         private GUIStyle loadingStatusStyle;
+        private GUIStyle demoHudPanelStyle;
+        private GUIStyle demoHudHeaderStyle;
+        private GUIStyle demoHudTextStyle;
+        private GUIStyle demoHudDimStyle;
+        private GUIStyle demoHudOkStyle;
+        private GUIStyle demoHudWarningStyle;
+        private GUIStyle demoHudKeyStyle;
+        private GUIStyle miniMapPanelStyle;
+        private GUIStyle miniMapLabelStyle;
+        private Texture2D miniMapPlayerDotTexture;
+        private Texture2D miniMapActiveAnimalDotTexture;
+        private Texture2D miniMapArchivedAnimalDotTexture;
 
         private Material reefMaterial;
         private Material kelpMaterial;
@@ -81,6 +93,8 @@ namespace Underwater
         private bool niaVoiceInFlight;
         private bool niaVoiceStopRequested;
         private string niaVoiceDeviceName;
+        private string niaVoiceStatusLine = "Voice warming up";
+        private string lastAgentActionLine = "Waiting for player action";
         private bool worldSyncLoading;
         private float worldSyncProgress;
         private string worldSyncStatus = "Loading thread pets";
@@ -198,6 +212,8 @@ namespace Underwater
             }
 
             EnsureGuiStyles();
+            DrawDemoHud();
+            DrawMiniMap();
 
             if (worldSyncLoading)
             {
@@ -518,32 +534,39 @@ namespace Underwater
             if (niaVoiceCaptureRoutine != null && !string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
             {
                 LogRealtimeVoice("Start ignored because microphone capture is already recording.");
+                SetNiaVoiceStatus("Already recording.");
                 return;
             }
 
             if (niaVoiceInFlight)
             {
                 LogRealtimeVoice("Start ignored because a realtime voice request is already in flight.");
+                SetNiaVoiceStatus("Voice request already in flight.");
                 return;
             }
 
             ReloadApiSettings();
-            LogRealtimeVoice($"Start requested. openAiKeySet={realtimeClient.HasApiKey}, niaKeySet={apiSettings != null && !string.IsNullOrWhiteSpace(apiSettings.niaApiKey)}");
+            bool openAiKeySet = realtimeClient != null && realtimeClient.HasApiKey;
+            LogRealtimeVoice($"Start requested. openAiKeySet={openAiKeySet}, niaKeySet={apiSettings != null && !string.IsNullOrWhiteSpace(apiSettings.niaApiKey)}");
 
-            if (!realtimeClient.HasApiKey)
+            if (!openAiKeySet)
             {
-                Debug.LogWarning($"Set openAiApiKey in {UnderwaterUserSettings.RelativePath} to enable voice questions.");
+                string message = $"Missing OpenAI API key. Set openAiApiKey in {UnderwaterUserSettings.RelativePath}.";
+                SetNiaVoiceStatus(message);
+                Debug.LogWarning(message);
                 return;
             }
 
             if (Microphone.devices == null || Microphone.devices.Length == 0)
             {
+                SetNiaVoiceStatus("No microphone device is available.");
                 Debug.LogWarning("No microphone device is available.");
                 return;
             }
 
             niaVoiceStopRequested = false;
             niaVoiceCaptureRoutine = StartCoroutine(CaptureRealtimeVoiceQuestion());
+            SetNiaVoiceStatus("Recording question...");
             LogRealtimeVoice("Microphone capture started.");
         }
 
@@ -552,11 +575,13 @@ namespace Underwater
             if (niaVoiceCaptureRoutine == null || string.IsNullOrEmpty(niaVoiceDeviceName) || !Microphone.IsRecording(niaVoiceDeviceName))
             {
                 LogRealtimeVoice("Stop ignored because microphone capture is not recording.");
+                SetNiaVoiceStatus("Not recording.");
                 return;
             }
 
             niaVoiceStopRequested = true;
             Microphone.End(niaVoiceDeviceName);
+            SetNiaVoiceStatus("Processing question...");
             LogRealtimeVoice("Microphone capture stopped by player.");
         }
 
@@ -593,6 +618,8 @@ namespace Underwater
             {
                 realtimeClient.SetNiaClient(configuredNiaClient);
             }
+
+            UpdateNiaVoiceReadinessStatus();
         }
 
         private NiaApiClient CreateNiaClient(UnderwaterUserSettings settings)
@@ -818,6 +845,254 @@ namespace Underwater
                 normal = { textColor = new Color(0.76f, 0.95f, 1f) }
             };
 
+            demoHudPanelStyle = new GUIStyle(GUI.skin.box)
+            {
+                border = new RectOffset(12, 12, 12, 12),
+                padding = new RectOffset(14, 14, 10, 10)
+            };
+            demoHudPanelStyle.normal.background = CreateRoundedRectTexture(
+                36,
+                36,
+                10f,
+                new Color(0.01f, 0.05f, 0.07f, 0.82f),
+                new Color(0.18f, 0.86f, 0.9f, 0.52f),
+                1f);
+
+            demoHudHeaderStyle = new GUIStyle(labelStyle)
+            {
+                fontSize = 11,
+                fontStyle = FontStyle.Bold,
+                clipping = TextClipping.Clip,
+                normal = { textColor = new Color(0.68f, 0.98f, 1f) }
+            };
+
+            demoHudTextStyle = new GUIStyle(labelStyle)
+            {
+                fontSize = 12,
+                wordWrap = true,
+                clipping = TextClipping.Clip,
+                normal = { textColor = new Color(0.9f, 0.98f, 1f) }
+            };
+
+            demoHudDimStyle = new GUIStyle(demoHudTextStyle)
+            {
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = new Color(0.55f, 0.72f, 0.76f) }
+            };
+
+            demoHudOkStyle = new GUIStyle(demoHudTextStyle)
+            {
+                normal = { textColor = new Color(0.52f, 1f, 0.76f) }
+            };
+
+            demoHudWarningStyle = new GUIStyle(demoHudTextStyle)
+            {
+                normal = { textColor = new Color(1f, 0.72f, 0.48f) }
+            };
+
+            demoHudKeyStyle = new GUIStyle(demoHudTextStyle)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontStyle = FontStyle.Bold,
+                padding = new RectOffset(4, 4, 1, 2),
+                normal = { textColor = new Color(0.02f, 0.12f, 0.14f) }
+            };
+            demoHudKeyStyle.normal.background = CreateRoundedRectTexture(
+                28,
+                22,
+                6f,
+                new Color(0.68f, 1f, 0.96f, 0.96f),
+                new Color(1f, 1f, 1f, 0.65f),
+                1f);
+
+            miniMapPanelStyle = new GUIStyle(GUI.skin.box)
+            {
+                border = new RectOffset(12, 12, 12, 12),
+                padding = new RectOffset(8, 8, 8, 8)
+            };
+            miniMapPanelStyle.normal.background = CreateRoundedRectTexture(
+                36,
+                36,
+                10f,
+                new Color(0.01f, 0.05f, 0.07f, 0.76f),
+                new Color(0.18f, 0.86f, 0.9f, 0.5f),
+                1f);
+
+            miniMapLabelStyle = new GUIStyle(demoHudHeaderStyle)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 10,
+                normal = { textColor = new Color(0.74f, 0.98f, 1f) }
+            };
+
+            miniMapPlayerDotTexture = CreateCircleTexture(18, new Color(0.95f, 1f, 0.92f, 1f), new Color(0.12f, 0.25f, 0.23f, 1f), 2f);
+            miniMapActiveAnimalDotTexture = CreateCircleTexture(14, new Color(0.2f, 0.95f, 1f, 0.96f), new Color(0.78f, 1f, 1f, 0.82f), 1f);
+            miniMapArchivedAnimalDotTexture = CreateCircleTexture(12, new Color(1f, 0.72f, 0.32f, 0.95f), new Color(1f, 0.92f, 0.64f, 0.78f), 1f);
+        }
+
+        private void DrawDemoHud()
+        {
+            float width = Mathf.Min(360f, Mathf.Max(260f, Screen.width - 24f));
+            float contentWidth = width - 28f;
+            string lastAction = Shorten(lastAgentActionLine, 118);
+            GUIContent lastActionContent = new GUIContent(lastAction);
+            float lastActionHeight = Mathf.Clamp(demoHudTextStyle.CalcHeight(lastActionContent, contentWidth - 54f), 18f, 48f);
+            float height = 120f + lastActionHeight;
+            Rect panelRect = new Rect(12f, 12f, width, height);
+            float x = panelRect.x + 14f;
+            float y = panelRect.y + 10f;
+
+            GUI.Box(panelRect, GUIContent.none, demoHudPanelStyle);
+            GUI.Label(new Rect(x, y, contentWidth, 16f), "DEMO HUD", demoHudHeaderStyle);
+
+            y += 22f;
+            DrawHudControl(x, y, "E", "Spawn agent");
+            DrawHudControl(x + 140f, y, "Hold V", "Ask reef");
+
+            y += 29f;
+            string voiceState = FormatVoiceState();
+            y = DrawHudStatusRow(x, y, contentWidth, "Bridge", FormatBridgeState(), GetHudStatusStyle(bridgeState));
+            y = DrawHudStatusRow(x, y, contentWidth, "Voice", voiceState, GetHudStatusStyle(voiceState));
+
+            y += 7f;
+            GUI.Label(new Rect(x, y, 48f, lastActionHeight), "Last", demoHudDimStyle);
+            GUI.Label(new Rect(x + 54f, y, contentWidth - 54f, lastActionHeight), lastActionContent, demoHudTextStyle);
+        }
+
+        private void DrawHudControl(float x, float y, string key, string label)
+        {
+            float keyWidth = key.Length > 1 ? 46f : 26f;
+            GUI.Label(new Rect(x, y, keyWidth, 20f), key, demoHudKeyStyle);
+            GUI.Label(new Rect(x + keyWidth + 6f, y + 1f, 104f, 20f), label, demoHudTextStyle);
+        }
+
+        private float DrawHudStatusRow(float x, float y, float width, string label, string value, GUIStyle valueStyle)
+        {
+            GUI.Label(new Rect(x, y, 54f, 18f), label, demoHudDimStyle);
+            GUI.Label(new Rect(x + 54f, y, width - 54f, 18f), value, valueStyle);
+            return y + 18f;
+        }
+
+        private string FormatBridgeState()
+        {
+            if (aquariumBridge == null)
+            {
+                return "offline";
+            }
+
+            return string.IsNullOrWhiteSpace(bridgeState) ? "offline" : bridgeState.Trim();
+        }
+
+        private string FormatVoiceState()
+        {
+            if (niaVoiceCaptureRoutine != null && !string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
+            {
+                return "recording";
+            }
+
+            if (niaVoiceInFlight)
+            {
+                return "asking reef";
+            }
+
+            if (niaVoiceAudioSource != null && niaVoiceAudioSource.isPlaying)
+            {
+                return "speaking";
+            }
+
+            return string.IsNullOrWhiteSpace(niaVoiceStatusLine) ? "idle" : niaVoiceStatusLine;
+        }
+
+        private GUIStyle GetHudStatusStyle(string state)
+        {
+            string normalized = string.IsNullOrWhiteSpace(state) ? string.Empty : state.Trim().ToLowerInvariant();
+
+            if (normalized.Contains("ready")
+                || normalized.Contains("recording")
+                || normalized.Contains("asking")
+                || normalized.Contains("speaking")
+                || normalized.Contains("created"))
+            {
+                return demoHudOkStyle;
+            }
+
+            if (normalized.Contains("offline")
+                || normalized.Contains("warning")
+                || normalized.Contains("missing")
+                || normalized.Contains("no microphone")
+                || normalized.Contains("could not")
+                || normalized.Contains("failed")
+                || normalized.Contains("unavailable"))
+            {
+                return demoHudWarningStyle;
+            }
+
+            return demoHudTextStyle;
+        }
+
+        private void DrawMiniMap()
+        {
+            const float mapRangeMeters = 90f;
+            float size = Mathf.Clamp(Mathf.Min(Screen.width, Screen.height) * 0.19f, 118f, 158f);
+            Rect panelRect = new Rect(Screen.width - size - 12f, 12f, size, size);
+            Rect mapRect = new Rect(panelRect.x + 10f, panelRect.y + 22f, panelRect.width - 20f, panelRect.height - 32f);
+            Vector2 center = mapRect.center;
+            float radius = Mathf.Min(mapRect.width, mapRect.height) * 0.5f;
+
+            GUI.Box(panelRect, GUIContent.none, miniMapPanelStyle);
+            GUI.Label(new Rect(panelRect.x + 8f, panelRect.y + 5f, panelRect.width - 16f, 14f), "ANIMALS", miniMapLabelStyle);
+
+            Color previousColor = GUI.color;
+            GUI.color = new Color(0.1f, 0.42f, 0.48f, 0.24f);
+            GUI.DrawTexture(new Rect(center.x - 0.5f, mapRect.y + 2f, 1f, mapRect.height - 4f), Texture2D.whiteTexture);
+            GUI.DrawTexture(new Rect(mapRect.x + 2f, center.y - 0.5f, mapRect.width - 4f, 1f), Texture2D.whiteTexture);
+            GUI.color = previousColor;
+
+            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            {
+                if (pair.Value != null)
+                {
+                    DrawMiniMapDot(pair.Value.transform.position, center, radius, mapRangeMeters, miniMapActiveAnimalDotTexture, 8f);
+                }
+            }
+
+            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
+            {
+                if (pair.Value != null)
+                {
+                    DrawMiniMapDot(pair.Value.transform.position, center, radius, mapRangeMeters, miniMapArchivedAnimalDotTexture, 7f);
+                }
+            }
+
+            DrawTextureCentered(center, miniMapPlayerDotTexture, 12f);
+        }
+
+        private void DrawMiniMapDot(Vector3 worldPosition, Vector2 center, float radius, float mapRangeMeters, Texture2D texture, float size)
+        {
+            if (Player == null)
+            {
+                return;
+            }
+
+            Vector3 offset = worldPosition - Player.transform.position;
+            Vector2 mapOffset = new Vector2(offset.x, -offset.z) / Mathf.Max(1f, mapRangeMeters) * radius;
+
+            if (mapOffset.sqrMagnitude > radius * radius)
+            {
+                mapOffset = mapOffset.normalized * radius;
+            }
+
+            DrawTextureCentered(center + mapOffset, texture, size);
+        }
+
+        private static void DrawTextureCentered(Vector2 center, Texture2D texture, float size)
+        {
+            if (texture == null)
+            {
+                return;
+            }
+
+            GUI.DrawTexture(new Rect(center.x - size * 0.5f, center.y - size * 0.5f, size, size), texture);
         }
 
         private static Texture2D CreateRoundedRectTexture(int width, int height, float radius, Color fillColor, Color borderColor, float borderWidth)
@@ -844,6 +1119,42 @@ namespace Underwater
                         texture.SetPixel(x, y, clear);
                     }
                     else if (borderWidth > 0f && (distanceFromEdge < borderWidth || cornerDistance > radius - borderWidth))
+                    {
+                        texture.SetPixel(x, y, borderColor);
+                    }
+                    else
+                    {
+                        texture.SetPixel(x, y, fillColor);
+                    }
+                }
+            }
+
+            texture.Apply();
+            return texture;
+        }
+
+        private static Texture2D CreateCircleTexture(int size, Color fillColor, Color borderColor, float borderWidth)
+        {
+            Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                name = "Aquarium Mini Map Dot"
+            };
+            Color clear = new Color(1f, 1f, 1f, 0f);
+            float center = (size - 1f) * 0.5f;
+            float radius = center;
+            float innerRadius = Mathf.Max(0f, radius - borderWidth);
+
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float distance = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
+
+                    if (distance > radius)
+                    {
+                        texture.SetPixel(x, y, clear);
+                    }
+                    else if (distance >= innerRadius)
                     {
                         texture.SetPixel(x, y, borderColor);
                     }
@@ -1259,6 +1570,7 @@ namespace Underwater
             AudioClip clip = Microphone.Start(niaVoiceDeviceName, false, maxSeconds, sampleRate);
             float startedAt = Time.realtimeSinceStartup;
             int recordedSamples = 0;
+            SetNiaVoiceStatus($"Recording on {niaVoiceDeviceName}...", false);
             LogRealtimeVoice($"Recording from microphone. device=\"{niaVoiceDeviceName}\", sampleRate={sampleRate}, maxSeconds={maxSeconds}");
 
             while (!niaVoiceStopRequested && Microphone.IsRecording(niaVoiceDeviceName) && Time.realtimeSinceStartup - startedAt < maxSeconds)
@@ -1282,12 +1594,14 @@ namespace Underwater
 
             if (clip == null || recordedSamples <= sampleRate / 4)
             {
+                SetNiaVoiceStatus("Voice clip too short.");
                 LogRealtimeVoice($"Captured audio too short. clipPresent={clip != null}, recordedSamples={recordedSamples}, sampleRate={sampleRate}");
                 niaVoiceInFlight = false;
                 yield break;
             }
 
             float[] monoSamples = ExtractMonoSamples(clip, recordedSamples);
+            SetNiaVoiceStatus("Asking reef...");
             LogRealtimeVoice($"Captured audio ready. recordedSamples={recordedSamples}, monoSamples={monoSamples.Length}, sampleRate={sampleRate}");
             _ = RequestRealtimeVoiceQuestionAsync(monoSamples, sampleRate);
         }
@@ -1358,6 +1672,7 @@ namespace Underwater
         {
             try
             {
+                SetNiaVoiceStatus("Asking reef...", false);
                 string voice = apiSettings != null
                     ? apiSettings.OpenAiRealtimeVoiceOr(defaultOpenAiRealtimeVoice)
                     : defaultOpenAiRealtimeVoice;
@@ -1367,12 +1682,17 @@ namespace Underwater
                     BuildRealtimeAnswerInstructions(),
                     voice,
                     CancellationToken.None);
+                SetNiaVoiceStatus("Speaking answer.", false);
+                SetLastAgentAction(string.IsNullOrWhiteSpace(result.Transcript)
+                    ? "Voice answer received."
+                    : $"Voice answer: {Shorten(result.Transcript, 96)}");
                 LogRealtimeVoice($"Realtime answer received. outputSamples={result.Samples.Length}, sampleRate={result.SampleRate}, transcriptPresent={!string.IsNullOrWhiteSpace(result.Transcript)}");
                 PlayNiaAudio(result);
             }
             catch (Exception ex)
             {
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+                SetNiaVoiceStatus($"Voice failed: {Shorten(message, 80)}");
                 Debug.LogWarning($"Voice question unavailable: {Shorten(message, 96)}");
             }
             finally
@@ -1403,6 +1723,7 @@ namespace Underwater
             niaVoiceAudioSource.Stop();
             niaVoiceAudioSource.clip = clip;
             niaVoiceAudioSource.Play();
+            SetNiaVoiceStatus("Playing answer.", false);
             LogRealtimeVoice($"Playing realtime answer audio. samples={audio.Samples.Length}, sampleRate={sampleRate}");
         }
 
@@ -1472,6 +1793,7 @@ namespace Underwater
 
             ApplyAtmosphereProfile();
             directorStatusLine = $"Realtime atmosphere: {BuildAtmosphereSummary()}.";
+            SetLastAgentAction(directorStatusLine);
         }
 
         private void ConfigureAtmosphereController()
@@ -1514,7 +1836,9 @@ namespace Underwater
             particleObject.transform.SetParent(atmosphereRoot.transform);
 
             ParticleSystem particles = particleObject.AddComponent<ParticleSystem>();
+            particles.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
             ParticleSystem.MainModule main = particles.main;
+            main.playOnAwake = false;
             main.loop = true;
             main.duration = 5f;
             main.startLifetime = new ParticleSystem.MinMaxCurve(2.4f, 4.8f);
@@ -2170,6 +2494,47 @@ namespace Underwater
         private void SetWorkThreadStatus(string status)
         {
             workThreadStatusLine = string.IsNullOrWhiteSpace(status) ? string.Empty : status.Trim();
+            SetLastAgentAction(workThreadStatusLine);
+        }
+
+        private void SetNiaVoiceStatus(string status, bool updateLastAction = true)
+        {
+            niaVoiceStatusLine = string.IsNullOrWhiteSpace(status) ? "Voice idle" : status.Trim();
+
+            if (updateLastAction)
+            {
+                SetLastAgentAction($"Voice: {niaVoiceStatusLine}");
+            }
+        }
+
+        private void UpdateNiaVoiceReadinessStatus()
+        {
+            if (niaVoiceInFlight || niaVoiceCaptureRoutine != null || (niaVoiceAudioSource != null && niaVoiceAudioSource.isPlaying))
+            {
+                return;
+            }
+
+            if (realtimeClient == null || !realtimeClient.HasApiKey)
+            {
+                SetNiaVoiceStatus("Missing OpenAI API key.", false);
+                return;
+            }
+
+            if (Microphone.devices == null || Microphone.devices.Length == 0)
+            {
+                SetNiaVoiceStatus("No microphone detected.", false);
+                return;
+            }
+
+            SetNiaVoiceStatus("Ready", false);
+        }
+
+        private void SetLastAgentAction(string status)
+        {
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                lastAgentActionLine = status.Trim();
+            }
         }
 
         private int GetNextPersistentWorkThreadNumber()
