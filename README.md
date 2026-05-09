@@ -37,7 +37,13 @@ Underwater is a Unity 6 project that turns Codex threads into a live 3D world. T
    Assets/TerrainDemoScene_URP/Scenes/TerrainDemoScene.unity
    ```
 
-6. Press Play.
+6. In a separate terminal, start the Codex app-server for live thread pets:
+
+   ```sh
+   codex app-server --listen ws://127.0.0.1:4500
+   ```
+
+7. Press Play.
 
 The scene works without the Codex app-server, but live thread pets require the bridge to connect to `ws://127.0.0.1:4500`.
 
@@ -145,4 +151,3 @@ For command-line runs, use a local Unity executable for version `6000.4.6f1`, fo
 - `Assets/Scripts/OpenAIRealtimeClient.cs`: realtime voice client and tool handling
 - `Assets/Scripts/NiaApiClient.cs`: optional Nia search client
 - `Assets/Scripts/UnderwaterUserSettings.cs`: local user settings loader
-
