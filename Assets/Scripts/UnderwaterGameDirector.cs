@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
@@ -26,6 +27,7 @@ namespace Underwater
         private const float TerrainModeBasemapDistance = 180f;
         private const float TerrainThreadInitialMinRadius = 28f;
         private const float TerrainThreadInitialMaxRadius = 86f;
+        private const float DefaultAtmosphereIntensity = 0.55f;
 
         [SerializeField] private string defaultOpenAiRealtimeModel = "gpt-realtime-2";
         [SerializeField] private string defaultOpenAiRealtimeVoice = "marin";
@@ -37,6 +39,7 @@ namespace Underwater
 
         private readonly Dictionary<string, ThreadPetAI> activeThreads = new Dictionary<string, ThreadPetAI>();
         private readonly Dictionary<string, ArchivedThreadPet> archivedPets = new Dictionary<string, ArchivedThreadPet>();
+        private readonly ConcurrentQueue<AtmosphereCommand> pendingAtmosphereCommands = new ConcurrentQueue<AtmosphereCommand>();
 
         private GUIStyle labelStyle;
         private GUIStyle threadTagStyle;
@@ -48,8 +51,17 @@ namespace Underwater
         private Material reefMaterial;
         private Material kelpMaterial;
         private Material surfaceMaterial;
+        private Material precipitationMaterial;
+        private Material sparkleMaterial;
         private AquariumDirectorBridge aquariumBridge;
         private Terrain[] sceneTerrains = Array.Empty<Terrain>();
+        private Light atmosphereSun;
+        private GameObject atmosphereRoot;
+        private ParticleSystem precipitationParticles;
+        private ParticleSystem sparkleParticles;
+        private Bloom atmosphereBloom;
+        private Vignette atmosphereVignette;
+        private ColorAdjustments atmosphereColorAdjustments;
         private AudioSource niaVoiceAudioSource;
         private UnderwaterUserSettings apiSettings;
         private OpenAIRealtimeClient realtimeClient;
@@ -71,6 +83,10 @@ namespace Underwater
         private float worldSyncProgress;
         private string worldSyncStatus = "Loading thread pets";
         private bool usingSceneTerrain;
+        private string atmosphereTimeOfDay = "day";
+        private string atmosphereWeather = "clear";
+        private float atmosphereIntensity = DefaultAtmosphereIntensity;
+        private string atmosphereMood = "calm";
 
         private sealed class QueuedWorldSync
         {
@@ -87,6 +103,14 @@ namespace Underwater
             public string phase;
             public float distance;
             public float angle;
+        }
+
+        private sealed class AtmosphereCommand
+        {
+            public string timeOfDay;
+            public string weather;
+            public float intensity;
+            public string mood;
         }
 
         public static UnderwaterGameDirector Instance { get; private set; }
@@ -131,6 +155,8 @@ namespace Underwater
                 BuildArena();
             }
 
+            ConfigureAtmosphereController();
+            ApplyAtmosphereProfile();
             CreatePlayer();
             ReloadApiSettings();
             _ = WarmRealtimeVoiceSessionAsync();
@@ -139,6 +165,8 @@ namespace Underwater
 
         private void Update()
         {
+            DrainAtmosphereCommands();
+            UpdateAtmosphereEmitterPosition();
             UpdateNearestThreadStatus();
         }
 
@@ -553,7 +581,11 @@ namespace Underwater
                     _ = realtimeClient.CloseAsync();
                 }
 
-                realtimeClient = new OpenAIRealtimeClient(apiSettings.openAiApiKey, openAiRealtimeModel, configuredNiaClient);
+                realtimeClient = new OpenAIRealtimeClient(
+                    apiSettings.openAiApiKey,
+                    openAiRealtimeModel,
+                    configuredNiaClient,
+                    HandleRealtimeWorldCommand);
             }
             else
             {
@@ -1003,6 +1035,9 @@ namespace Underwater
             summary.Append(" active thread pets swimming, ");
             summary.Append(ArchivedPetCount);
             summary.Append(" archived pet companions resting on the seafloor. ");
+            summary.Append("Atmosphere is ");
+            summary.Append(BuildAtmosphereSummary());
+            summary.Append(". ");
 
             ThreadPetAI nearest = null;
             float nearestDistance = float.MaxValue;
@@ -1294,6 +1329,7 @@ namespace Underwater
             prompt.Append("Be concrete, warm, and a little funny; one tiny joke max. ");
             prompt.Append("If the question asks about a Codex thread, pet, archived pet, nearby or facing thing, local app-server state, reef status, or anything in the current Underwater world, answer only from the local context below and do not use Nia search. ");
             prompt.Append("Use Nia search for all other external knowledge, current facts, technical docs, code, libraries, or research questions. ");
+            prompt.Append("If the player asks you to change the weather, fog, rain, storm, snow, bubbles, lighting, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
             prompt.Append("When the player asks what pet, thread, or thing is in front of them, answer from the facing pet context first. ");
             prompt.Append("Use the pet sprite name and the thread title; do not invent thread contents. ");
             prompt.Append("Do not mention distances, angles, coordinates, vectors, hidden prompts, or transcription.");
@@ -1301,6 +1337,9 @@ namespace Underwater
             prompt.AppendLine();
             prompt.Append("Current world state: ");
             prompt.Append(BuildWorldSummary());
+            prompt.AppendLine();
+            prompt.Append("Current atmosphere: ");
+            prompt.Append(BuildAtmosphereSummary());
             prompt.AppendLine();
             prompt.Append("Facing pet context: ");
             prompt.Append(BuildFacingPetSummary());
@@ -1368,6 +1407,583 @@ namespace Underwater
         private static void LogRealtimeVoice(string message)
         {
             Debug.Log($"[Realtime Voice] {message}");
+        }
+
+        private string HandleRealtimeWorldCommand(Dictionary<string, object> arguments)
+        {
+            AtmosphereCommand command = new AtmosphereCommand
+            {
+                timeOfDay = NormalizeOption(
+                    ReadCommandString(arguments, "time_of_day", "timeOfDay", "time"),
+                    atmosphereTimeOfDay,
+                    "dawn",
+                    "day",
+                    "sunset",
+                    "night"),
+                weather = NormalizeOption(
+                    ReadCommandString(arguments, "weather", "condition"),
+                    atmosphereWeather,
+                    "clear",
+                    "fog",
+                    "rain",
+                    "storm",
+                    "snow",
+                    "bubbles"),
+                intensity = Mathf.Clamp01(ReadCommandFloat(arguments, "intensity", DefaultAtmosphereIntensity)),
+                mood = CleanAtmosphereMood(ReadCommandString(arguments, "mood", "style"))
+            };
+
+            pendingAtmosphereCommands.Enqueue(command);
+
+            return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+            {
+                ["accepted"] = true,
+                ["timeOfDay"] = command.timeOfDay,
+                ["weather"] = command.weather,
+                ["intensity"] = command.intensity,
+                ["mood"] = command.mood
+            });
+        }
+
+        private void DrainAtmosphereCommands()
+        {
+            bool applied = false;
+
+            while (pendingAtmosphereCommands.TryDequeue(out AtmosphereCommand command))
+            {
+                if (command == null)
+                {
+                    continue;
+                }
+
+                atmosphereTimeOfDay = command.timeOfDay;
+                atmosphereWeather = command.weather;
+                atmosphereIntensity = Mathf.Clamp01(command.intensity);
+                atmosphereMood = string.IsNullOrWhiteSpace(command.mood) ? atmosphereMood : command.mood;
+                applied = true;
+            }
+
+            if (!applied)
+            {
+                return;
+            }
+
+            ApplyAtmosphereProfile();
+            directorStatusLine = $"Realtime atmosphere: {BuildAtmosphereSummary()}.";
+        }
+
+        private void ConfigureAtmosphereController()
+        {
+            if (atmosphereRoot != null)
+            {
+                return;
+            }
+
+            atmosphereRoot = new GameObject("Realtime Atmosphere");
+            precipitationMaterial = CreateUnlitMaterial(new Color(0.66f, 0.9f, 1f, 0.42f));
+            sparkleMaterial = CreateUnlitMaterial(new Color(0.55f, 0.94f, 1f, 0.64f));
+            precipitationParticles = CreateAtmosphereParticleSystem(
+                "Weather Veil",
+                precipitationMaterial,
+                1200,
+                new Color(0.66f, 0.9f, 1f, 0.42f),
+                0.035f,
+                new Vector3(GetEmitterWidth(), 1f, GetEmitterWidth()));
+            sparkleParticles = CreateAtmosphereParticleSystem(
+                "Bioluminescent Drift",
+                sparkleMaterial,
+                520,
+                new Color(0.5f, 0.95f, 1f, 0.58f),
+                0.06f,
+                new Vector3(GetEmitterWidth() * 0.72f, 8f, GetEmitterWidth() * 0.72f));
+
+            UpdateAtmosphereEmitterPosition();
+        }
+
+        private ParticleSystem CreateAtmosphereParticleSystem(
+            string objectName,
+            Material material,
+            int maxParticles,
+            Color startColor,
+            float startSize,
+            Vector3 shapeScale)
+        {
+            GameObject particleObject = new GameObject(objectName);
+            particleObject.transform.SetParent(atmosphereRoot.transform);
+
+            ParticleSystem particles = particleObject.AddComponent<ParticleSystem>();
+            ParticleSystem.MainModule main = particles.main;
+            main.loop = true;
+            main.duration = 5f;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(2.4f, 4.8f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0.4f, 1.4f);
+            main.startSize = new ParticleSystem.MinMaxCurve(startSize * 0.7f, startSize * 1.4f);
+            main.startColor = startColor;
+            main.maxParticles = maxParticles;
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+
+            ParticleSystem.EmissionModule emission = particles.emission;
+            emission.enabled = true;
+            emission.rateOverTime = 0f;
+
+            ParticleSystem.ShapeModule shape = particles.shape;
+            shape.enabled = true;
+            shape.shapeType = ParticleSystemShapeType.Box;
+            shape.scale = shapeScale;
+
+            ParticleSystem.VelocityOverLifetimeModule velocity = particles.velocityOverLifetime;
+            velocity.enabled = true;
+            velocity.space = ParticleSystemSimulationSpace.World;
+            velocity.x = new ParticleSystem.MinMaxCurve(-0.45f, 0.45f);
+            velocity.y = new ParticleSystem.MinMaxCurve(-2.2f, -0.7f);
+            velocity.z = new ParticleSystem.MinMaxCurve(-0.45f, 0.45f);
+
+            ParticleSystemRenderer renderer = particles.GetComponent<ParticleSystemRenderer>();
+            renderer.sharedMaterial = material;
+            renderer.renderMode = ParticleSystemRenderMode.Billboard;
+            renderer.sortingOrder = 10;
+
+            return particles;
+        }
+
+        private void ApplyAtmosphereProfile()
+        {
+            EnsureAtmosphereReferences();
+
+            float intensity = Mathf.Clamp01(atmosphereIntensity);
+            Color backgroundColor;
+            Color fogColor;
+            Color ambientSky;
+            Color ambientEquator;
+            Color ambientGround;
+            Color sunColor;
+            Quaternion sunRotation;
+            float sunIntensity;
+            float baseFogDensity;
+
+            switch (atmosphereTimeOfDay)
+            {
+                case "dawn":
+                    backgroundColor = new Color(0.08f, 0.16f, 0.22f);
+                    fogColor = new Color(0.11f, 0.26f, 0.3f);
+                    ambientSky = new Color(0.16f, 0.26f, 0.3f);
+                    ambientEquator = new Color(0.16f, 0.22f, 0.22f);
+                    ambientGround = new Color(0.04f, 0.07f, 0.07f);
+                    sunColor = new Color(1f, 0.62f, 0.38f);
+                    sunRotation = Quaternion.Euler(18f, -44f, 0f);
+                    sunIntensity = 0.42f;
+                    baseFogDensity = 0.018f;
+                    break;
+                case "sunset":
+                    backgroundColor = new Color(0.1f, 0.12f, 0.19f);
+                    fogColor = new Color(0.17f, 0.18f, 0.24f);
+                    ambientSky = new Color(0.19f, 0.2f, 0.27f);
+                    ambientEquator = new Color(0.18f, 0.14f, 0.12f);
+                    ambientGround = new Color(0.04f, 0.05f, 0.06f);
+                    sunColor = new Color(1f, 0.45f, 0.24f);
+                    sunRotation = Quaternion.Euler(12f, 34f, 0f);
+                    sunIntensity = 0.34f;
+                    baseFogDensity = 0.019f;
+                    break;
+                case "night":
+                    backgroundColor = new Color(0.005f, 0.012f, 0.04f);
+                    fogColor = new Color(0.015f, 0.045f, 0.09f);
+                    ambientSky = new Color(0.025f, 0.06f, 0.12f);
+                    ambientEquator = new Color(0.018f, 0.04f, 0.075f);
+                    ambientGround = new Color(0.004f, 0.01f, 0.018f);
+                    sunColor = new Color(0.38f, 0.54f, 0.92f);
+                    sunRotation = Quaternion.Euler(145f, -34f, 0f);
+                    sunIntensity = Mathf.Lerp(0.08f, 0.22f, 1f - intensity);
+                    baseFogDensity = 0.023f;
+                    break;
+                default:
+                    backgroundColor = new Color(0.01f, 0.1f, 0.17f);
+                    fogColor = new Color(0.02f, 0.16f, 0.22f);
+                    ambientSky = new Color(0.08f, 0.22f, 0.3f);
+                    ambientEquator = new Color(0.05f, 0.18f, 0.24f);
+                    ambientGround = new Color(0.02f, 0.05f, 0.06f);
+                    sunColor = new Color(0.53f, 0.82f, 0.94f);
+                    sunRotation = Quaternion.Euler(60f, -24f, 0f);
+                    sunIntensity = 0.52f;
+                    baseFogDensity = 0.016f;
+                    break;
+            }
+
+            float weatherFogBoost = WeatherFogBoost(atmosphereWeather, intensity);
+            float sunWeatherMultiplier = WeatherSunMultiplier(atmosphereWeather, intensity);
+
+            Camera camera = Camera.main;
+
+            if (camera != null)
+            {
+                camera.clearFlags = CameraClearFlags.SolidColor;
+                camera.backgroundColor = Color.Lerp(backgroundColor, fogColor, Mathf.Clamp01(weatherFogBoost * 12f));
+            }
+
+            RenderSettings.fog = true;
+            RenderSettings.fogMode = FogMode.ExponentialSquared;
+            RenderSettings.fogDensity = Mathf.Clamp(baseFogDensity + weatherFogBoost, 0.004f, 0.075f);
+            RenderSettings.fogColor = Color.Lerp(fogColor, WeatherTint(atmosphereWeather), Mathf.Clamp01(intensity * 0.35f));
+            RenderSettings.ambientMode = AmbientMode.Trilight;
+            RenderSettings.ambientSkyColor = ambientSky;
+            RenderSettings.ambientEquatorColor = ambientEquator;
+            RenderSettings.ambientGroundColor = ambientGround;
+            RenderSettings.reflectionIntensity = Mathf.Lerp(0.12f, 0.42f, atmosphereTimeOfDay == "night" ? 0.2f : 0.8f) * sunWeatherMultiplier;
+
+            if (atmosphereSun != null)
+            {
+                atmosphereSun.type = LightType.Directional;
+                atmosphereSun.color = Color.Lerp(sunColor, WeatherTint(atmosphereWeather), Mathf.Clamp01(intensity * 0.18f));
+                atmosphereSun.intensity = sunIntensity * sunWeatherMultiplier;
+                atmosphereSun.transform.rotation = sunRotation;
+            }
+
+            ApplyAtmospherePostProcessing(intensity);
+            ApplyWeatherParticles(intensity);
+        }
+
+        private void ApplyAtmospherePostProcessing(float intensity)
+        {
+            if (atmosphereBloom != null)
+            {
+                atmosphereBloom.active = true;
+                atmosphereBloom.threshold.Override(atmosphereTimeOfDay == "night" ? 0.42f : 0.72f);
+                atmosphereBloom.intensity.Override(atmosphereTimeOfDay == "night" ? Mathf.Lerp(0.85f, 1.35f, intensity) : Mathf.Lerp(0.46f, 0.78f, intensity));
+                atmosphereBloom.scatter.Override(0.78f);
+            }
+
+            if (atmosphereVignette != null)
+            {
+                atmosphereVignette.active = true;
+                float weatherVignette = atmosphereWeather == "storm" ? 0.14f * intensity : 0f;
+                atmosphereVignette.intensity.Override((atmosphereTimeOfDay == "night" ? 0.34f : 0.22f) + weatherVignette);
+                atmosphereVignette.smoothness.Override(0.65f);
+            }
+
+            if (atmosphereColorAdjustments != null)
+            {
+                atmosphereColorAdjustments.active = true;
+                atmosphereColorAdjustments.postExposure.Override(atmosphereTimeOfDay == "night" ? -0.62f : atmosphereWeather == "storm" ? -0.34f : -0.12f);
+                atmosphereColorAdjustments.saturation.Override(atmosphereWeather == "storm" ? -38f : -26f);
+                atmosphereColorAdjustments.colorFilter.Override(WeatherColorFilter());
+            }
+        }
+
+        private void ApplyWeatherParticles(float intensity)
+        {
+            if (precipitationParticles == null || sparkleParticles == null)
+            {
+                return;
+            }
+
+            float precipitationRate = 0f;
+            float sparkleRate = atmosphereTimeOfDay == "night" ? Mathf.Lerp(18f, 58f, intensity) : 0f;
+            Color precipitationColor = new Color(0.66f, 0.9f, 1f, 0.42f);
+            float precipitationSize = 0.035f;
+            Vector2 yVelocity = new Vector2(-2.2f, -0.7f);
+
+            switch (atmosphereWeather)
+            {
+                case "rain":
+                    precipitationRate = Mathf.Lerp(90f, 360f, intensity);
+                    precipitationColor = new Color(0.58f, 0.82f, 1f, 0.5f);
+                    precipitationSize = 0.027f;
+                    yVelocity = new Vector2(-11f, -6.5f);
+                    break;
+                case "storm":
+                    precipitationRate = Mathf.Lerp(220f, 720f, intensity);
+                    precipitationColor = new Color(0.5f, 0.78f, 1f, 0.56f);
+                    precipitationSize = 0.032f;
+                    yVelocity = new Vector2(-16f, -8f);
+                    sparkleRate += Mathf.Lerp(24f, 96f, intensity);
+                    break;
+                case "snow":
+                    precipitationRate = Mathf.Lerp(46f, 190f, intensity);
+                    precipitationColor = new Color(0.86f, 0.97f, 1f, 0.72f);
+                    precipitationSize = 0.075f;
+                    yVelocity = new Vector2(-1.6f, -0.35f);
+                    break;
+                case "bubbles":
+                    sparkleRate += Mathf.Lerp(95f, 310f, intensity);
+                    break;
+            }
+
+            ConfigureParticleEmission(precipitationParticles, precipitationRate, precipitationColor, precipitationSize, yVelocity);
+            ConfigureParticleEmission(sparkleParticles, sparkleRate, new Color(0.48f, 0.96f, 1f, 0.62f), 0.06f, new Vector2(0.25f, 1.8f));
+        }
+
+        private void ConfigureParticleEmission(ParticleSystem particles, float rate, Color color, float size, Vector2 yVelocity)
+        {
+            ParticleSystem.MainModule main = particles.main;
+            main.startColor = color;
+            main.startSize = new ParticleSystem.MinMaxCurve(size * 0.7f, size * 1.4f);
+
+            ParticleSystem.EmissionModule emission = particles.emission;
+            emission.rateOverTime = rate;
+
+            ParticleSystem.VelocityOverLifetimeModule velocity = particles.velocityOverLifetime;
+            velocity.y = new ParticleSystem.MinMaxCurve(yVelocity.x, yVelocity.y);
+
+            if (rate > 0f && !particles.isPlaying)
+            {
+                particles.Play();
+            }
+            else if (rate <= 0f && particles.isPlaying)
+            {
+                particles.Stop(true, ParticleSystemStopBehavior.StopEmitting);
+            }
+        }
+
+        private void EnsureAtmosphereReferences()
+        {
+            if (atmosphereSun == null)
+            {
+                Light[] lights = FindObjectsByType<Light>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+
+                for (int i = 0; i < lights.Length; i++)
+                {
+                    if (lights[i] != null && lights[i].type == LightType.Directional)
+                    {
+                        atmosphereSun = lights[i];
+                        break;
+                    }
+                }
+            }
+
+            if (atmosphereSun == null)
+            {
+                GameObject lightObject = new GameObject("Realtime Atmosphere Light");
+                atmosphereSun = lightObject.AddComponent<Light>();
+                atmosphereSun.type = LightType.Directional;
+            }
+
+            if (atmosphereBloom != null && atmosphereVignette != null && atmosphereColorAdjustments != null)
+            {
+                return;
+            }
+
+            Volume volume = FindAnyObjectByType<Volume>();
+
+            if (volume == null)
+            {
+                return;
+            }
+
+            VolumeProfile profile = volume.sharedProfile;
+
+            if (profile == null)
+            {
+                return;
+            }
+
+            profile.TryGet(out atmosphereBloom);
+            profile.TryGet(out atmosphereVignette);
+            profile.TryGet(out atmosphereColorAdjustments);
+        }
+
+        private void UpdateAtmosphereEmitterPosition()
+        {
+            if (atmosphereRoot == null)
+            {
+                return;
+            }
+
+            Camera camera = Camera.main;
+            Vector3 anchor = camera != null
+                ? camera.transform.position + (camera.transform.forward * 6f)
+                : Player != null
+                    ? Player.transform.position
+                    : PlayBounds.center;
+
+            float emitterHeight = usingSceneTerrain ? 26f : 14f;
+            atmosphereRoot.transform.position = new Vector3(anchor.x, Mathf.Min(PlayBounds.max.y - 1f, anchor.y + emitterHeight), anchor.z);
+        }
+
+        private string BuildAtmosphereSummary()
+        {
+            return $"{atmosphereMood} {atmosphereWeather} {atmosphereTimeOfDay}, intensity {atmosphereIntensity:0.0}";
+        }
+
+        private float GetEmitterWidth()
+        {
+            return Mathf.Clamp(Mathf.Min(PlayBounds.size.x, PlayBounds.size.z) * 0.42f, 36f, 150f);
+        }
+
+        private static float WeatherFogBoost(string weather, float intensity)
+        {
+            switch (weather)
+            {
+                case "fog":
+                    return Mathf.Lerp(0.012f, 0.043f, intensity);
+                case "rain":
+                    return Mathf.Lerp(0.005f, 0.018f, intensity);
+                case "storm":
+                    return Mathf.Lerp(0.014f, 0.05f, intensity);
+                case "snow":
+                    return Mathf.Lerp(0.007f, 0.026f, intensity);
+                default:
+                    return 0f;
+            }
+        }
+
+        private static float WeatherSunMultiplier(string weather, float intensity)
+        {
+            switch (weather)
+            {
+                case "fog":
+                    return Mathf.Lerp(0.82f, 0.42f, intensity);
+                case "rain":
+                    return Mathf.Lerp(0.9f, 0.58f, intensity);
+                case "storm":
+                    return Mathf.Lerp(0.68f, 0.24f, intensity);
+                case "snow":
+                    return Mathf.Lerp(0.95f, 0.72f, intensity);
+                default:
+                    return 1f;
+            }
+        }
+
+        private static Color WeatherTint(string weather)
+        {
+            switch (weather)
+            {
+                case "storm":
+                    return new Color(0.18f, 0.22f, 0.32f);
+                case "snow":
+                    return new Color(0.78f, 0.92f, 1f);
+                case "fog":
+                    return new Color(0.42f, 0.62f, 0.68f);
+                case "rain":
+                    return new Color(0.25f, 0.45f, 0.58f);
+                default:
+                    return new Color(0.3f, 0.78f, 0.88f);
+            }
+        }
+
+        private Color WeatherColorFilter()
+        {
+            if (atmosphereTimeOfDay == "night")
+            {
+                return new Color(0.58f, 0.76f, 1f);
+            }
+
+            if (atmosphereTimeOfDay == "sunset" || atmosphereTimeOfDay == "dawn")
+            {
+                return new Color(1f, 0.76f, 0.6f);
+            }
+
+            switch (atmosphereWeather)
+            {
+                case "storm":
+                    return new Color(0.62f, 0.72f, 0.9f);
+                case "snow":
+                    return new Color(0.88f, 0.96f, 1f);
+                default:
+                    return new Color(0.74f, 0.92f, 1f);
+            }
+        }
+
+        private static string NormalizeOption(string value, string fallback, params string[] allowed)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return fallback;
+            }
+
+            string normalized = value.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty).Replace(" ", string.Empty);
+
+            if (normalized == "preserve" || normalized == "same" || normalized == "current")
+            {
+                return fallback;
+            }
+
+            if (normalized == "morning" || normalized == "sunrise")
+            {
+                normalized = "dawn";
+            }
+            else if (normalized == "evening" || normalized == "dusk")
+            {
+                normalized = "sunset";
+            }
+            else if (normalized == "midnight")
+            {
+                normalized = "night";
+            }
+            else if (normalized == "stormy" || normalized == "thunderstorm")
+            {
+                normalized = "storm";
+            }
+            else if (normalized == "rainy")
+            {
+                normalized = "rain";
+            }
+            else if (normalized == "mist" || normalized == "misty")
+            {
+                normalized = "fog";
+            }
+
+            for (int i = 0; i < allowed.Length; i++)
+            {
+                if (string.Equals(normalized, allowed[i], StringComparison.Ordinal))
+                {
+                    return allowed[i];
+                }
+            }
+
+            return fallback;
+        }
+
+        private static string CleanAtmosphereMood(string mood)
+        {
+            if (string.IsNullOrWhiteSpace(mood))
+            {
+                return "calm";
+            }
+
+            return Shorten(mood.Trim().ToLowerInvariant(), 32);
+        }
+
+        private static string ReadCommandString(Dictionary<string, object> arguments, params string[] names)
+        {
+            if (arguments == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < names.Length; i++)
+            {
+                if (arguments.TryGetValue(names[i], out object value) && value != null)
+                {
+                    return value as string ?? Convert.ToString(value);
+                }
+            }
+
+            return null;
+        }
+
+        private static float ReadCommandFloat(Dictionary<string, object> arguments, string name, float fallback)
+        {
+            if (arguments == null || !arguments.TryGetValue(name, out object value) || value == null)
+            {
+                return fallback;
+            }
+
+            if (value is float floatValue)
+            {
+                return floatValue;
+            }
+
+            if (value is double doubleValue)
+            {
+                return (float)doubleValue;
+            }
+
+            if (value is int intValue)
+            {
+                return intValue;
+            }
+
+            return float.TryParse(Convert.ToString(value), out float parsed) ? parsed : fallback;
         }
 
         private async Task CreateWorkThreadFromWorldAsync(string title, string prompt, int workThreadNumber)
@@ -1504,6 +2120,7 @@ namespace Underwater
             sun.color = new Color(0.53f, 0.82f, 0.94f);
             sun.intensity = 0.52f;
             sun.transform.rotation = Quaternion.Euler(60f, -24f, 0f);
+            atmosphereSun = sun;
         }
 
         private void ConfigurePostProcessing()
@@ -1529,6 +2146,7 @@ namespace Underwater
                 bloom = runtimeProfile.Add<Bloom>(true);
             }
 
+            atmosphereBloom = bloom;
             bloom.active = true;
             bloom.threshold.Override(0.72f);
             bloom.intensity.Override(0.58f);
@@ -1539,6 +2157,7 @@ namespace Underwater
                 vignette = runtimeProfile.Add<Vignette>(true);
             }
 
+            atmosphereVignette = vignette;
             vignette.active = true;
             vignette.intensity.Override(0.22f);
             vignette.smoothness.Override(0.65f);
@@ -1548,6 +2167,7 @@ namespace Underwater
                 colorAdjustments = runtimeProfile.Add<ColorAdjustments>(true);
             }
 
+            atmosphereColorAdjustments = colorAdjustments;
             colorAdjustments.active = true;
             colorAdjustments.postExposure.Override(-0.12f);
             colorAdjustments.saturation.Override(-26f);
