@@ -157,11 +157,6 @@ namespace Underwater
                 spawnPressed = Keyboard.current.eKey.wasPressedThisFrame;
             }
 
-            if (Gamepad.current != null)
-            {
-                spawnPressed |= Gamepad.current.buttonNorth.wasPressedThisFrame;
-            }
-
             if (spawnPressed)
             {
                 director.RequestWorkThreadSpawnFromPlayer();
