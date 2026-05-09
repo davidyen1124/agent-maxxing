@@ -52,6 +52,32 @@ namespace Forest.Tests
             Assert.That(RenderSettings.sun.intensity, Is.GreaterThanOrEqualTo(1.2f), "Terrain night should be playable, not pitch black.");
             Assert.That(RenderSettings.ambientSkyColor.maxColorComponent, Is.GreaterThan(0.3f), "Terrain night needs enough moonlit ambient fill for navigation.");
             Assert.That(RenderSettings.fogDensity, Is.LessThanOrEqualTo(0.0015f), "Terrain night fog should not hide nearby vegetation.");
+
+            FieldInfo precipitationField = typeof(ForestGameDirector).GetField("precipitationParticles", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.That(precipitationField, Is.Not.Null);
+
+            ParticleSystem precipitation = precipitationField.GetValue(director) as ParticleSystem;
+            Assert.That(precipitation, Is.Not.Null, "Atmosphere setup should create the precipitation particle system.");
+            Assert.That(precipitation.main.maxParticles, Is.GreaterThanOrEqualTo(6000), "Terrain precipitation needs enough particles to read at forest scale.");
+
+            weatherField.SetValue(director, "rain");
+            intensityField.SetValue(director, 0.75f);
+            applyAtmosphereMethod.Invoke(director, null);
+
+            ParticleSystemRenderer precipitationRenderer = precipitation.GetComponent<ParticleSystemRenderer>();
+            Assert.That(precipitationRenderer, Is.Not.Null, "Precipitation particles should have a renderer.");
+            Assert.That(precipitation.emission.rateOverTime.constantMax, Is.GreaterThan(1000f), "Terrain rain should emit densely enough to be visible near the camera.");
+            Assert.That(precipitation.main.startSize.constantMax, Is.GreaterThan(0.08f), "Terrain rain streaks should be scaled above arena-mode drizzle.");
+            Assert.That(precipitation.shape.scale.x, Is.InRange(40f, 80f), "Terrain precipitation should be camera-local instead of spread across the whole world.");
+            Assert.That(precipitationRenderer.renderMode, Is.EqualTo(ParticleSystemRenderMode.Stretch), "Rain should render as streaks rather than tiny dots.");
+
+            weatherField.SetValue(director, "snow");
+            applyAtmosphereMethod.Invoke(director, null);
+
+            Assert.That(precipitation.emission.rateOverTime.constantMax, Is.GreaterThan(500f), "Terrain snow should emit enough flakes to be visible.");
+            Assert.That(precipitation.main.startSize.constantMax, Is.GreaterThan(0.2f), "Terrain snowflakes should be large enough to see against the terrain skybox.");
+            Assert.That(precipitation.shape.scale.y, Is.GreaterThan(4f), "Terrain snow should spawn in a deeper volume so flakes drift through view.");
+            Assert.That(precipitationRenderer.renderMode, Is.EqualTo(ParticleSystemRenderMode.Billboard), "Snow should render as flakes, not rain streaks.");
         }
 
         [Test]

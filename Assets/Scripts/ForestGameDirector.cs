@@ -2070,10 +2070,10 @@ namespace Forest
             precipitationParticles = CreateAtmosphereParticleSystem(
                 "Weather Veil",
                 precipitationMaterial,
-                1200,
+                6000,
                 new Color(0.66f, 0.9f, 1f, 0.42f),
                 0.035f,
-                new Vector3(GetEmitterWidth(), 1f, GetEmitterWidth()));
+                new Vector3(GetPrecipitationEmitterWidth(), 1f, GetPrecipitationEmitterWidth()));
             sparkleParticles = CreateAtmosphereParticleSystem(
                 "Bioluminescent Drift",
                 sparkleMaterial,
@@ -2428,35 +2428,101 @@ namespace Forest
             Color precipitationColor = new Color(0.66f, 0.9f, 1f, 0.42f);
             float precipitationSize = 0.035f;
             Vector2 yVelocity = new Vector2(-2.2f, -0.7f);
+            Vector2 xVelocity = new Vector2(-0.45f, 0.45f);
+            Vector2 zVelocity = new Vector2(-0.45f, 0.45f);
+            Vector3 precipitationShape = new Vector3(GetPrecipitationEmitterWidth(), 1f, GetPrecipitationEmitterWidth());
+            ParticleSystemRenderMode renderMode = ParticleSystemRenderMode.Billboard;
+            float lengthScale = 1f;
+            float velocityScale = 0f;
 
             switch (atmosphereWeather)
             {
                 case "rain":
-                    precipitationRate = Mathf.Lerp(90f, 360f, intensity);
-                    precipitationColor = new Color(0.58f, 0.82f, 1f, 0.5f);
-                    precipitationSize = 0.027f;
-                    yVelocity = new Vector2(-11f, -6.5f);
+                    precipitationRate = usingSceneTerrain
+                        ? Mathf.Lerp(820f, 1800f, intensity)
+                        : Mathf.Lerp(90f, 360f, intensity);
+                    precipitationColor = usingSceneTerrain
+                        ? new Color(0.72f, 0.9f, 1f, 0.72f)
+                        : new Color(0.58f, 0.82f, 1f, 0.5f);
+                    precipitationSize = usingSceneTerrain ? 0.085f : 0.027f;
+                    yVelocity = usingSceneTerrain ? new Vector2(-26f, -15f) : new Vector2(-11f, -6.5f);
+                    xVelocity = usingSceneTerrain ? new Vector2(-1.4f, 0.35f) : new Vector2(-0.75f, 0.2f);
+                    zVelocity = usingSceneTerrain ? new Vector2(-0.75f, 0.75f) : new Vector2(-0.45f, 0.45f);
+                    precipitationShape.y = usingSceneTerrain ? 6f : 1f;
+                    renderMode = ParticleSystemRenderMode.Stretch;
+                    lengthScale = usingSceneTerrain ? 10f : 5.5f;
+                    velocityScale = usingSceneTerrain ? 0.18f : 0.1f;
                     break;
                 case "storm":
-                    precipitationRate = Mathf.Lerp(220f, 720f, intensity);
-                    precipitationColor = new Color(0.5f, 0.78f, 1f, 0.56f);
-                    precipitationSize = 0.032f;
-                    yVelocity = new Vector2(-16f, -8f);
+                    precipitationRate = usingSceneTerrain
+                        ? Mathf.Lerp(1300f, 2800f, intensity)
+                        : Mathf.Lerp(220f, 720f, intensity);
+                    precipitationColor = usingSceneTerrain
+                        ? new Color(0.66f, 0.86f, 1f, 0.78f)
+                        : new Color(0.5f, 0.78f, 1f, 0.56f);
+                    precipitationSize = usingSceneTerrain ? 0.1f : 0.032f;
+                    yVelocity = usingSceneTerrain ? new Vector2(-34f, -20f) : new Vector2(-16f, -8f);
+                    xVelocity = usingSceneTerrain ? new Vector2(-4.2f, -1.1f) : new Vector2(-1.7f, -0.4f);
+                    zVelocity = usingSceneTerrain ? new Vector2(-1.3f, 1.3f) : new Vector2(-0.55f, 0.55f);
+                    precipitationShape.y = usingSceneTerrain ? 7f : 1f;
+                    renderMode = ParticleSystemRenderMode.Stretch;
+                    lengthScale = usingSceneTerrain ? 13f : 6.5f;
+                    velocityScale = usingSceneTerrain ? 0.22f : 0.12f;
                     sparkleRate += Mathf.Lerp(24f, 96f, intensity);
                     break;
                 case "snow":
-                    precipitationRate = Mathf.Lerp(46f, 190f, intensity);
-                    precipitationColor = new Color(0.86f, 0.97f, 1f, 0.72f);
-                    precipitationSize = 0.075f;
-                    yVelocity = new Vector2(-1.6f, -0.35f);
+                    precipitationRate = usingSceneTerrain
+                        ? Mathf.Lerp(360f, 980f, intensity)
+                        : Mathf.Lerp(46f, 190f, intensity);
+                    precipitationColor = usingSceneTerrain
+                        ? new Color(0.94f, 0.99f, 1f, 0.92f)
+                        : new Color(0.86f, 0.97f, 1f, 0.72f);
+                    precipitationSize = usingSceneTerrain ? 0.22f : 0.075f;
+                    yVelocity = usingSceneTerrain ? new Vector2(-3.2f, -0.75f) : new Vector2(-1.6f, -0.35f);
+                    xVelocity = usingSceneTerrain ? new Vector2(-1.15f, 1.15f) : new Vector2(-0.55f, 0.55f);
+                    zVelocity = usingSceneTerrain ? new Vector2(-0.85f, 0.85f) : new Vector2(-0.45f, 0.45f);
+                    precipitationShape.y = usingSceneTerrain ? 5f : 1f;
                     break;
             }
 
-            ConfigureParticleEmission(precipitationParticles, precipitationRate, precipitationColor, precipitationSize, yVelocity);
-            ConfigureParticleEmission(sparkleParticles, sparkleRate, new Color(0.48f, 0.96f, 1f, 0.62f), 0.06f, new Vector2(0.25f, 1.8f));
+            ConfigureParticleEmission(
+                precipitationParticles,
+                precipitationRate,
+                precipitationColor,
+                precipitationSize,
+                yVelocity,
+                xVelocity,
+                zVelocity,
+                precipitationShape,
+                renderMode,
+                lengthScale,
+                velocityScale);
+            ConfigureParticleEmission(
+                sparkleParticles,
+                sparkleRate,
+                new Color(0.48f, 0.96f, 1f, 0.62f),
+                0.06f,
+                new Vector2(0.25f, 1.8f),
+                new Vector2(-0.45f, 0.45f),
+                new Vector2(-0.45f, 0.45f),
+                new Vector3(GetEmitterWidth() * 0.72f, 8f, GetEmitterWidth() * 0.72f),
+                ParticleSystemRenderMode.Billboard,
+                1f,
+                0f);
         }
 
-        private void ConfigureParticleEmission(ParticleSystem particles, float rate, Color color, float size, Vector2 yVelocity)
+        private void ConfigureParticleEmission(
+            ParticleSystem particles,
+            float rate,
+            Color color,
+            float size,
+            Vector2 yVelocity,
+            Vector2 xVelocity,
+            Vector2 zVelocity,
+            Vector3 shapeScale,
+            ParticleSystemRenderMode renderMode,
+            float lengthScale,
+            float velocityScale)
         {
             ParticleSystem.MainModule main = particles.main;
             main.startColor = color;
@@ -2466,7 +2532,21 @@ namespace Forest
             emission.rateOverTime = rate;
 
             ParticleSystem.VelocityOverLifetimeModule velocity = particles.velocityOverLifetime;
+            velocity.x = new ParticleSystem.MinMaxCurve(xVelocity.x, xVelocity.y);
             velocity.y = new ParticleSystem.MinMaxCurve(yVelocity.x, yVelocity.y);
+            velocity.z = new ParticleSystem.MinMaxCurve(zVelocity.x, zVelocity.y);
+
+            ParticleSystem.ShapeModule shape = particles.shape;
+            shape.scale = shapeScale;
+
+            ParticleSystemRenderer renderer = particles.GetComponent<ParticleSystemRenderer>();
+
+            if (renderer != null)
+            {
+                renderer.renderMode = renderMode;
+                renderer.lengthScale = lengthScale;
+                renderer.velocityScale = velocityScale;
+            }
 
             if (rate > 0f && !particles.isPlaying)
             {
@@ -2547,11 +2627,20 @@ namespace Forest
         {
             switch (atmosphereWeather)
             {
+                case "rain":
+                case "storm":
+                    return 14f;
                 case "snow":
-                    return usingSceneTerrain ? 7f : 5.5f;
+                    return usingSceneTerrain ? 10f : 5.5f;
                 default:
                     return usingSceneTerrain ? 26f : 14f;
             }
+        }
+
+        private float GetPrecipitationEmitterWidth()
+        {
+            float width = GetEmitterWidth();
+            return usingSceneTerrain ? Mathf.Clamp(width * 0.38f, 44f, 68f) : width;
         }
 
         private float GetEmitterWidth()
