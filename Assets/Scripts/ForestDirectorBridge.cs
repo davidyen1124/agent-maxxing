@@ -231,6 +231,7 @@ namespace Forest
                     EnqueueMainThread(() =>
                     {
                         appServerSocketOpen = true;
+                        codexConnected = false;
                         SetStatus("connecting", "Codex app-server socket open");
                     });
 
@@ -249,7 +250,11 @@ namespace Forest
                         appServerSocketOpen = false;
                         codexConnected = false;
                         SetStatus("reconnecting", $"Codex reconnect pending: {ex.Message}");
-                        Debug.LogError($"[ForestDirectorBridge] Connection loop failure: {ex}");
+
+                        if (!IsExpectedOfflineConnectionFailure(ex))
+                        {
+                            Debug.LogWarning($"[ForestDirectorBridge] Connection loop failure: {ex}");
+                        }
                     });
                 }
                 finally
@@ -1788,16 +1793,31 @@ namespace Forest
         {
             switch ((phase ?? string.Empty).Trim().ToLowerInvariant())
             {
-                case "connecting":
                 case "connected":
                 case "acting":
                 case "warning":
                 case "error":
-                case "reconnecting":
                     return true;
                 default:
                     return false;
             }
+        }
+
+        private static bool IsExpectedOfflineConnectionFailure(Exception exception)
+        {
+            Exception current = exception;
+
+            while (current != null)
+            {
+                if (current is WebSocketException || current is System.Net.Sockets.SocketException)
+                {
+                    return true;
+                }
+
+                current = current.InnerException;
+            }
+
+            return false;
         }
 
         private static string ReadString(Dictionary<string, object> root, params string[] path)
