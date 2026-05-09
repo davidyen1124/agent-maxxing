@@ -1468,7 +1468,7 @@ namespace Underwater
             prompt.Append("Be concrete, warm, and a little funny; one tiny joke max. ");
             prompt.Append("If the question asks about a Codex thread, pet, archived pet, nearby or facing thing, local app-server state, reef status, or anything in the current Underwater world, answer only from the local context below and do not use Nia search. ");
             prompt.Append("Use Nia search for all other external knowledge, current facts, technical docs, code, libraries, or research questions. ");
-            prompt.Append("If the player asks you to change the weather, fog, rain, storm, snow, bubbles, lighting, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
+            prompt.Append("If the player asks you to change weather, fog, rain, storms, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
             prompt.Append("When the player asks what pet, thread, or thing is in front of them, answer from the facing pet context first. ");
             prompt.Append("Use the pet sprite name and the thread title; do not invent thread contents. ");
             prompt.Append("Do not mention distances, angles, coordinates, vectors, hidden prompts, or transcription.");
@@ -1559,22 +1559,12 @@ namespace Underwater
         {
             AtmosphereCommand command = new AtmosphereCommand
             {
-                timeOfDay = NormalizeOption(
+                timeOfDay = NormalizeTimeOfDayOption(
                     ReadCommandString(arguments, "time_of_day", "timeOfDay", "time"),
-                    atmosphereTimeOfDay,
-                    "dawn",
-                    "day",
-                    "sunset",
-                    "night"),
-                weather = NormalizeOption(
+                    atmosphereTimeOfDay),
+                weather = NormalizeWeatherOption(
                     ReadCommandString(arguments, "weather", "condition"),
-                    atmosphereWeather,
-                    "clear",
-                    "fog",
-                    "rain",
-                    "storm",
-                    "snow",
-                    "bubbles"),
+                    atmosphereWeather),
                 intensity = Mathf.Clamp01(ReadCommandFloat(arguments, "intensity", DefaultAtmosphereIntensity)),
                 mood = CleanAtmosphereMood(ReadCommandString(arguments, "mood", "style"))
             };
@@ -2099,13 +2089,26 @@ namespace Underwater
                     ? Player.transform.position
                     : PlayBounds.center;
 
-            float emitterHeight = usingSceneTerrain ? 26f : 14f;
+            float emitterHeight = GetAtmosphereEmitterHeight();
             atmosphereRoot.transform.position = new Vector3(anchor.x, Mathf.Min(PlayBounds.max.y - 1f, anchor.y + emitterHeight), anchor.z);
         }
 
         private string BuildAtmosphereSummary()
         {
             return $"{atmosphereMood} {atmosphereWeather} {atmosphereTimeOfDay}, intensity {atmosphereIntensity:0.0}";
+        }
+
+        private float GetAtmosphereEmitterHeight()
+        {
+            switch (atmosphereWeather)
+            {
+                case "snow":
+                    return usingSceneTerrain ? 7f : 5.5f;
+                case "bubbles":
+                    return usingSceneTerrain ? 4f : 2.5f;
+                default:
+                    return usingSceneTerrain ? 26f : 14f;
+            }
         }
 
         private float GetEmitterWidth()
@@ -2187,58 +2190,138 @@ namespace Underwater
             }
         }
 
-        private static string NormalizeOption(string value, string fallback, params string[] allowed)
+        private static string NormalizeTimeOfDayOption(string value, string fallback)
+        {
+            string normalized = NormalizeCommandToken(value);
+
+            if (ShouldPreserveOption(normalized))
+            {
+                return fallback;
+            }
+
+            switch (normalized)
+            {
+                case "dawn":
+                case "morning":
+                case "earlymorning":
+                case "sunrise":
+                case "daybreak":
+                case "firstlight":
+                    return "dawn";
+                case "day":
+                case "daylight":
+                case "daytime":
+                case "noon":
+                case "midday":
+                case "afternoon":
+                case "sunny":
+                case "bright":
+                    return "day";
+                case "sunset":
+                case "evening":
+                case "dusk":
+                case "twilight":
+                case "goldenhour":
+                case "sundown":
+                    return "sunset";
+                case "night":
+                case "nighttime":
+                case "midnight":
+                case "moonlight":
+                case "moonlit":
+                case "dark":
+                    return "night";
+                default:
+                    return fallback;
+            }
+        }
+
+        private static string NormalizeWeatherOption(string value, string fallback)
+        {
+            string normalized = NormalizeCommandToken(value);
+
+            if (ShouldPreserveOption(normalized))
+            {
+                return fallback;
+            }
+
+            switch (normalized)
+            {
+                case "clear":
+                case "clearsky":
+                case "sunny":
+                case "sunshine":
+                case "nice":
+                case "calm":
+                    return "clear";
+                case "fog":
+                case "foggy":
+                case "mist":
+                case "misty":
+                case "haze":
+                case "hazy":
+                case "cloudy":
+                case "clouds":
+                case "overcast":
+                case "smoky":
+                    return "fog";
+                case "rain":
+                case "rainy":
+                case "drizzle":
+                case "drizzly":
+                case "shower":
+                case "showers":
+                case "downpour":
+                case "pouring":
+                case "wet":
+                    return "rain";
+                case "storm":
+                case "stormy":
+                case "thunder":
+                case "thunderstorm":
+                case "lightning":
+                case "tempest":
+                case "squall":
+                    return "storm";
+                case "snow":
+                case "snowy":
+                case "snowing":
+                case "flurry":
+                case "flurries":
+                case "blizzard":
+                case "sleet":
+                case "hail":
+                case "icy":
+                case "frost":
+                    return "snow";
+                case "bubbles":
+                case "bubble":
+                case "bubbly":
+                case "underwater":
+                case "submerged":
+                    return "bubbles";
+                default:
+                    return fallback;
+            }
+        }
+
+        private static string NormalizeCommandToken(string value)
         {
             if (string.IsNullOrWhiteSpace(value))
             {
-                return fallback;
+                return string.Empty;
             }
 
-            string normalized = value.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty).Replace(" ", string.Empty);
+            return value.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty).Replace(" ", string.Empty);
+        }
 
-            if (normalized == "preserve" || normalized == "same" || normalized == "current")
-            {
-                return fallback;
-            }
-
-            if (normalized == "morning" || normalized == "sunrise")
-            {
-                normalized = "dawn";
-            }
-            else if (normalized == "daylight" || normalized == "daytime" || normalized == "noon" || normalized == "afternoon")
-            {
-                normalized = "day";
-            }
-            else if (normalized == "evening" || normalized == "dusk")
-            {
-                normalized = "sunset";
-            }
-            else if (normalized == "midnight")
-            {
-                normalized = "night";
-            }
-            else if (normalized == "stormy" || normalized == "thunderstorm")
-            {
-                normalized = "storm";
-            }
-            else if (normalized == "rainy")
-            {
-                normalized = "rain";
-            }
-            else if (normalized == "mist" || normalized == "misty")
-            {
-                normalized = "fog";
-            }
-
-            for (int i = 0; i < allowed.Length; i++)
-            {
-                if (string.Equals(normalized, allowed[i], StringComparison.Ordinal))
-                {
-                    return allowed[i];
-                }
-            }
-
-            return fallback;
+        private static bool ShouldPreserveOption(string normalized)
+        {
+            return string.IsNullOrEmpty(normalized)
+                || normalized == "preserve"
+                || normalized == "same"
+                || normalized == "current"
+                || normalized == "unchanged";
         }
 
         private static string CleanAtmosphereMood(string mood)
