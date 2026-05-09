@@ -55,22 +55,6 @@ namespace Underwater
     }
 
     [Serializable]
-    public sealed class AquariumSpawnThreadCommand
-    {
-        public string title;
-        public string prompt;
-    }
-
-    [Serializable]
-    public sealed class AquariumDirectorActionResult
-    {
-        public string actionId;
-        public bool success;
-        public string message;
-        public string[] affectedIds;
-    }
-
-    [Serializable]
     public sealed class SerializableVector3
     {
         public float x;
