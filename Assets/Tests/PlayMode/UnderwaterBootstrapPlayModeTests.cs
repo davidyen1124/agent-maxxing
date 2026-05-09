@@ -1,4 +1,6 @@
 using System.Collections;
+using System.Collections.Generic;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -25,6 +27,69 @@ namespace Underwater.Tests
             Assert.That(director.Player.BoostNormalized, Is.GreaterThan(0.99f), "Player should start with full swim boost.");
             Assert.That(director.ActiveThreadCount, Is.GreaterThanOrEqualTo(0), "Thread count should be readable on boot.");
             Assert.That(director.ArchivedPetCount, Is.GreaterThanOrEqualTo(0), "Archived pet count should be readable on boot.");
+        }
+
+        [Test]
+        public void ThreadPetBubbleUsesTitleForGenericStatus()
+        {
+            GameObject gameObject = new GameObject("Thread Pet Test");
+            ThreadPetAI pet = gameObject.AddComponent<ThreadPetAI>();
+
+            try
+            {
+                pet.ApplySnapshot(new AquariumThreadSnapshot
+                {
+                    id = "thread-1",
+                    title = "Review recent conversations",
+                    statusMessage = "Thinking",
+                    phase = "working"
+                });
+
+                Assert.That(pet.BubbleMessage, Is.EqualTo("Review recent conversations..."));
+
+                pet.ApplySnapshot(new AquariumThreadSnapshot
+                {
+                    id = "thread-1",
+                    title = "Review recent conversations",
+                    statusMessage = "Comparing implementation options",
+                    phase = "working"
+                });
+
+                Assert.That(pet.BubbleMessage, Is.EqualTo("Comparing implementation options"));
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
+        public void BridgeReadsReasoningSummaryTextObjects()
+        {
+            MethodInfo method = typeof(AquariumDirectorBridge).GetMethod(
+                "ReadLatestReasoningOrAgentMessage",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.That(method, Is.Not.Null);
+
+            List<object> items = new List<object>
+            {
+                new Dictionary<string, object>
+                {
+                    ["type"] = "reasoning",
+                    ["summary"] = new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            ["type"] = "summary_text",
+                            ["text"] = "Comparing renderer paths"
+                        }
+                    }
+                }
+            };
+
+            string message = method.Invoke(null, new object[] { items }) as string;
+
+            Assert.That(message, Is.EqualTo("Comparing renderer paths"));
         }
     }
 }
