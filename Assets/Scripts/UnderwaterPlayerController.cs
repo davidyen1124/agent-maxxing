@@ -158,15 +158,22 @@ namespace Underwater
         private void HandleInteraction()
         {
             bool spawnPressed = false;
+            bool niaInsightPressed = false;
 
             if (Keyboard.current != null)
             {
                 spawnPressed = Keyboard.current.eKey.wasPressedThisFrame;
+                niaInsightPressed = Keyboard.current.rKey.wasPressedThisFrame;
             }
 
             if (spawnPressed)
             {
                 director.RequestWorkThreadSpawnFromPlayer();
+            }
+
+            if (niaInsightPressed)
+            {
+                director.RequestNiaReefInsightFromPlayer();
             }
         }
     }

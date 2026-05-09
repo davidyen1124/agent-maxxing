@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -15,6 +16,12 @@ namespace Underwater
         private const string ReefTaskTitlePrefix = "Underwater reef task ";
         private const string ReefTaskCounterPrefsKey = "Underwater.ReefTask.NextThreadNumber";
 
+        [SerializeField] private string niaBaseUrl = "https://apigcp.trynia.ai/v2";
+        [SerializeField] private string niaApiKeyEnvironmentVariable = "NIA_API_KEY";
+        [SerializeField] private string[] niaRepositories = Array.Empty<string>();
+        [SerializeField] private string[] niaDataSources = Array.Empty<string>();
+        [SerializeField] private int niaMaxTokens = 900;
+
         private readonly Dictionary<string, ThreadPetAI> activeThreads = new Dictionary<string, ThreadPetAI>();
         private readonly Dictionary<string, ArchivedThreadPet> archivedPets = new Dictionary<string, ArchivedThreadPet>();
 
@@ -24,6 +31,8 @@ namespace Underwater
         private GUIStyle speechBubbleShadowStyle;
         private GUIStyle loadingTitleStyle;
         private GUIStyle loadingStatusStyle;
+        private GUIStyle hudLabelStyle;
+        private GUIStyle hudStrongStyle;
 
         private Material reefMaterial;
         private Material kelpMaterial;
@@ -31,6 +40,7 @@ namespace Underwater
         private AquariumDirectorBridge aquariumBridge;
         private CodexPetCatalog petCatalog;
         private Terrain[] sceneTerrains = Array.Empty<Terrain>();
+        private NiaApiClient niaClient;
         private Coroutine worldSyncRoutine;
         private QueuedWorldSync queuedWorldSync;
         private int snapshotSequence;
@@ -42,6 +52,9 @@ namespace Underwater
         private bool workThreadSpawnInFlight;
         private int spawnedWorkThreadCount;
         private string workThreadStatusLine = "Codex work thread spawner ready";
+        private bool niaSearchInFlight;
+        private string niaStatusLine = "Nia reef oracle ready";
+        private string lastNiaInsight = string.Empty;
         private bool worldSyncLoading;
         private float worldSyncProgress;
         private string worldSyncStatus = "Loading thread pets";
@@ -95,6 +108,7 @@ namespace Underwater
             }
 
             CreatePlayer();
+            niaClient = new NiaApiClient(niaBaseUrl, niaApiKeyEnvironmentVariable, niaRepositories, niaDataSources, niaMaxTokens);
             AttachAquariumBridge(false);
             StartCoroutine(LoadCodexPetsThenAttachBridge());
         }
@@ -128,6 +142,7 @@ namespace Underwater
             }
 
             DrawThreadNameTags();
+            DrawStatusHud();
         }
 
         public void SyncThreadWorld(IReadOnlyList<AquariumThreadSnapshot> threads, IReadOnlyList<AquariumArchivedPetSnapshot> syncedArchivedPets, string detail)
@@ -439,6 +454,34 @@ namespace Underwater
             _ = CreateWorkThreadFromWorldAsync(title, prompt, nextThreadNumber);
         }
 
+        public void RequestNiaReefInsightFromPlayer()
+        {
+            if (startupLoading)
+            {
+                SetNiaStatus("Nia will be ready after the reef finishes loading.");
+                return;
+            }
+
+            if (niaSearchInFlight)
+            {
+                SetNiaStatus("Nia is already reading the reef.");
+                return;
+            }
+
+            niaClient ??= new NiaApiClient(niaBaseUrl, niaApiKeyEnvironmentVariable, niaRepositories, niaDataSources, niaMaxTokens);
+
+            if (!niaClient.HasApiKey)
+            {
+                SetNiaStatus($"Set {niaApiKeyEnvironmentVariable} before launching Unity to enable Nia.");
+                return;
+            }
+
+            niaSearchInFlight = true;
+            lastNiaInsight = string.Empty;
+            SetNiaStatus("Asking Nia for a grounded reef read...");
+            _ = RequestNiaReefInsightAsync();
+        }
+
         public AquariumDirectorSnapshot CreateSnapshot()
         {
             List<AquariumThreadSnapshot> threadSnapshots = new List<AquariumThreadSnapshot>(activeThreads.Count);
@@ -624,6 +667,21 @@ namespace Underwater
                 clipping = TextClipping.Clip,
                 normal = { textColor = new Color(0.76f, 0.95f, 1f) }
             };
+
+            hudLabelStyle = new GUIStyle(labelStyle)
+            {
+                fontSize = 13,
+                wordWrap = true,
+                clipping = TextClipping.Clip,
+                padding = new RectOffset(12, 12, 3, 3),
+                normal = { textColor = new Color(0.77f, 0.94f, 0.96f) }
+            };
+
+            hudStrongStyle = new GUIStyle(hudLabelStyle)
+            {
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = new Color(0.9f, 1f, 0.98f) }
+            };
         }
 
         private static Texture2D CreateRoundedRectTexture(int width, int height, float radius, Color fillColor, Color borderColor, float borderWidth)
@@ -749,6 +807,28 @@ namespace Underwater
             GUI.Box(shadowRect, GUIContent.none, speechBubbleShadowStyle);
             GUI.Box(tagRect, GUIContent.none, speechBubbleStyle);
             GUI.Label(tagRect, content, threadTagStyle);
+        }
+
+        private void DrawStatusHud()
+        {
+            string insight = string.IsNullOrWhiteSpace(lastNiaInsight) ? niaStatusLine : lastNiaInsight;
+            float width = Mathf.Clamp(Screen.width - 36f, 300f, 460f);
+            float height = string.IsNullOrWhiteSpace(insight) ? 86f : 122f;
+            Rect panelRect = new Rect(18f, 18f, width, height);
+            Rect bridgeRect = new Rect(panelRect.x + 10f, panelRect.y + 10f, panelRect.width - 20f, 22f);
+            Rect threadRect = new Rect(panelRect.x + 10f, panelRect.y + 34f, panelRect.width - 20f, 22f);
+            Rect niaRect = new Rect(panelRect.x + 10f, panelRect.y + 58f, panelRect.width - 20f, 50f);
+            Color previousColor = GUI.color;
+
+            GUI.color = new Color(0.01f, 0.07f, 0.1f, 0.72f);
+            GUI.DrawTexture(panelRect, Texture2D.whiteTexture);
+            GUI.color = new Color(0.24f, 0.9f, 0.98f, 0.38f);
+            GUI.DrawTexture(new Rect(panelRect.x, panelRect.yMax - 2f, panelRect.width, 2f), Texture2D.whiteTexture);
+            GUI.color = previousColor;
+
+            GUI.Label(bridgeRect, Shorten(directorStatusLine, 80), hudLabelStyle);
+            GUI.Label(threadRect, Shorten(nearestThreadTitle, 42) + " - " + Shorten(nearestThreadPhase, 42), hudStrongStyle);
+            GUI.Label(niaRect, Shorten(insight, 160), hudLabelStyle);
         }
 
         private static bool ShouldDrawBubbleMessage(string message)
@@ -901,6 +981,51 @@ namespace Underwater
             return prompt.ToString();
         }
 
+        private string BuildNiaInsightPrompt()
+        {
+            StringBuilder prompt = new StringBuilder();
+            prompt.Append("You are the Nia-backed knowledge layer for a Unity game named Underwater. ");
+            prompt.Append("Use any indexed project, documentation, or web context available to give one grounded, practical next step. ");
+            prompt.Append("Keep the answer under 35 words and avoid generic encouragement.");
+            prompt.AppendLine();
+            prompt.AppendLine();
+            prompt.Append("Current world state: ");
+            prompt.Append(BuildWorldSummary());
+            prompt.AppendLine();
+            prompt.Append("Nearest thread title: ");
+            prompt.Append(nearestThreadTitle);
+            prompt.AppendLine();
+            prompt.Append("Nearest thread phase/status: ");
+            prompt.Append(nearestThreadPhase);
+            return prompt.ToString();
+        }
+
+        private async Task RequestNiaReefInsightAsync()
+        {
+            try
+            {
+                NiaSearchResult result = await niaClient.QueryAsync(BuildNiaInsightPrompt(), CancellationToken.None);
+                niaSearchInFlight = false;
+                lastNiaInsight = CleanHudText(result.Answer, 180);
+
+                if (result.SourceLabels != null && result.SourceLabels.Length > 0)
+                {
+                    SetNiaStatus($"Nia cited {result.SourceLabels.Length} source(s).");
+                }
+                else
+                {
+                    SetNiaStatus("Nia answered from available context.");
+                }
+            }
+            catch (Exception ex)
+            {
+                niaSearchInFlight = false;
+                lastNiaInsight = string.Empty;
+                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+                SetNiaStatus($"Nia unavailable: {Shorten(message, 96)}");
+            }
+        }
+
         private async Task CreateWorkThreadFromWorldAsync(string title, string prompt, int workThreadNumber)
         {
             try
@@ -924,6 +1049,11 @@ namespace Underwater
         private void SetWorkThreadStatus(string status)
         {
             workThreadStatusLine = string.IsNullOrWhiteSpace(status) ? string.Empty : status.Trim();
+        }
+
+        private void SetNiaStatus(string status)
+        {
+            niaStatusLine = string.IsNullOrWhiteSpace(status) ? string.Empty : status.Trim();
         }
 
         private int GetNextPersistentWorkThreadNumber()
@@ -999,6 +1129,23 @@ namespace Underwater
         private static string FormatVector(Vector3 vector)
         {
             return $"({vector.x:F1}, {vector.y:F1}, {vector.z:F1})";
+        }
+
+        private static string CleanHudText(string text, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return string.Empty;
+            }
+
+            string cleaned = text.Replace("\r", " ").Replace("\n", " ").Trim();
+
+            while (cleaned.Contains("  "))
+            {
+                cleaned = cleaned.Replace("  ", " ");
+            }
+
+            return Shorten(cleaned, maxLength);
         }
 
         private void ConfigureLighting()

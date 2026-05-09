@@ -1869,7 +1869,7 @@ namespace Underwater
             return current;
         }
 
-        private static class MiniJson
+        internal static class MiniJson
         {
             public static object Deserialize(string json)
             {
