@@ -77,7 +77,7 @@ namespace Underwater
                 requestToken);
 
             await SendJsonAsync(socket, new Dictionary<string, object> { ["type"] = "input_audio_buffer.commit" }, requestToken);
-            await SendJsonAsync(socket, BuildAnswerResponseCreate(safeInstructions, safeVoice), requestToken);
+            await SendJsonAsync(socket, BuildAnswerResponseCreate(safeInstructions), requestToken);
 
             RealtimeAudioResult response = await ReadAudioResponseAsync(socket, requestToken);
 
@@ -199,7 +199,7 @@ namespace Underwater
             await WaitForEventTypeAsync(socket, "session.created", requestToken);
             await SendJsonAsync(socket, BuildSpeechSessionUpdate(safeVoice), requestToken);
             await WaitForEventTypeAsync(socket, "session.updated", requestToken);
-            await SendJsonAsync(socket, BuildSpeechResponseCreate(text.Trim(), safeVoice), requestToken);
+            await SendJsonAsync(socket, BuildSpeechResponseCreate(text.Trim()), requestToken);
 
             RealtimeAudioResult response = await ReadAudioResponseAsync(socket, requestToken);
 
@@ -252,7 +252,7 @@ namespace Underwater
                 {
                     ["type"] = "realtime",
                     ["model"] = model,
-                    ["output_modalities"] = new List<object> { "audio", "text" },
+                    ["output_modalities"] = new List<object> { "audio" },
                     ["audio"] = new Dictionary<string, object>
                     {
                         ["input"] = new Dictionary<string, object>
@@ -279,15 +279,14 @@ namespace Underwater
             };
         }
 
-        private static Dictionary<string, object> BuildAnswerResponseCreate(string instructions, string voice)
+        private static Dictionary<string, object> BuildAnswerResponseCreate(string instructions)
         {
             return new Dictionary<string, object>
             {
                 ["type"] = "response.create",
                 ["response"] = new Dictionary<string, object>
                 {
-                    ["output_modalities"] = new List<object> { "audio", "text" },
-                    ["voice"] = voice,
+                    ["output_modalities"] = new List<object> { "audio" },
                     ["instructions"] = instructions,
                     ["audio"] = new Dictionary<string, object>
                     {
@@ -313,7 +312,7 @@ namespace Underwater
                 {
                     ["type"] = "realtime",
                     ["model"] = model,
-                    ["output_modalities"] = new List<object> { "audio", "text" },
+                    ["output_modalities"] = new List<object> { "audio" },
                     ["audio"] = new Dictionary<string, object>
                     {
                         ["output"] = new Dictionary<string, object>
@@ -331,15 +330,14 @@ namespace Underwater
             };
         }
 
-        private static Dictionary<string, object> BuildSpeechResponseCreate(string text, string voice)
+        private static Dictionary<string, object> BuildSpeechResponseCreate(string text)
         {
             return new Dictionary<string, object>
             {
                 ["type"] = "response.create",
                 ["response"] = new Dictionary<string, object>
                 {
-                    ["output_modalities"] = new List<object> { "audio", "text" },
-                    ["voice"] = voice,
+                    ["output_modalities"] = new List<object> { "audio" },
                     ["input"] = new List<object>
                     {
                         new Dictionary<string, object>

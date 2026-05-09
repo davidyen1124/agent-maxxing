@@ -30,10 +30,6 @@ namespace Underwater
         private GUIStyle speechBubbleShadowStyle;
         private GUIStyle loadingTitleStyle;
         private GUIStyle loadingStatusStyle;
-        private GUIStyle hudLabelStyle;
-        private GUIStyle hudStrongStyle;
-        private GUIStyle niaHudStatusStyle;
-        private GUIStyle niaHudResultStyle;
 
         private Material reefMaterial;
         private Material kelpMaterial;
@@ -59,8 +55,6 @@ namespace Underwater
         private bool niaVoiceInFlight;
         private bool niaVoiceStopRequested;
         private string niaVoiceDeviceName;
-        private string niaStatusLine = "Realtime voice ready";
-        private string lastNiaInsight = string.Empty;
         private bool worldSyncLoading;
         private float worldSyncProgress;
         private string worldSyncStatus = "Loading thread pets";
@@ -153,7 +147,6 @@ namespace Underwater
             }
 
             DrawThreadNameTags();
-            DrawStatusHud();
         }
 
         public void SyncThreadWorld(IReadOnlyList<AquariumThreadSnapshot> threads, IReadOnlyList<AquariumArchivedPetSnapshot> syncedArchivedPets, string detail)
@@ -469,7 +462,6 @@ namespace Underwater
         {
             if (startupLoading)
             {
-                SetNiaStatus("Realtime voice will be ready after the reef finishes loading.");
                 return;
             }
 
@@ -480,7 +472,6 @@ namespace Underwater
 
             if (niaVoiceInFlight)
             {
-                SetNiaStatus("Realtime is already answering.");
                 return;
             }
 
@@ -488,13 +479,13 @@ namespace Underwater
 
             if (!realtimeClient.HasApiKey)
             {
-                SetNiaStatus($"Set openAiApiKey in {UnderwaterUserSettings.RelativePath}.");
+                Debug.LogWarning($"Set openAiApiKey in {UnderwaterUserSettings.RelativePath} to enable voice questions.");
                 return;
             }
 
             if (Microphone.devices == null || Microphone.devices.Length == 0)
             {
-                SetNiaStatus("No microphone device is available.");
+                Debug.LogWarning("No microphone device is available.");
                 return;
             }
 
@@ -511,7 +502,6 @@ namespace Underwater
 
             niaVoiceStopRequested = true;
             Microphone.End(niaVoiceDeviceName);
-            SetNiaStatus("Sending your voice question to Realtime...");
         }
 
         private void ReloadApiSettings()
@@ -708,35 +698,6 @@ namespace Underwater
                 normal = { textColor = new Color(0.76f, 0.95f, 1f) }
             };
 
-            hudLabelStyle = new GUIStyle(labelStyle)
-            {
-                fontSize = 13,
-                wordWrap = true,
-                clipping = TextClipping.Clip,
-                padding = new RectOffset(12, 12, 3, 3),
-                normal = { textColor = new Color(0.77f, 0.94f, 0.96f) }
-            };
-
-            hudStrongStyle = new GUIStyle(hudLabelStyle)
-            {
-                fontStyle = FontStyle.Bold,
-                normal = { textColor = new Color(0.9f, 1f, 0.98f) }
-            };
-
-            niaHudStatusStyle = new GUIStyle(hudLabelStyle)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                fontSize = 13,
-                normal = { textColor = new Color(0.7f, 0.94f, 1f) }
-            };
-
-            niaHudResultStyle = new GUIStyle(hudStrongStyle)
-            {
-                alignment = TextAnchor.UpperCenter,
-                fontSize = 15,
-                wordWrap = true,
-                normal = { textColor = new Color(0.95f, 1f, 0.98f) }
-            };
         }
 
         private static Texture2D CreateRoundedRectTexture(int width, int height, float radius, Color fillColor, Color borderColor, float borderWidth)
@@ -862,51 +823,6 @@ namespace Underwater
             GUI.Box(shadowRect, GUIContent.none, speechBubbleShadowStyle);
             GUI.Box(tagRect, GUIContent.none, speechBubbleStyle);
             GUI.Label(tagRect, content, threadTagStyle);
-        }
-
-        private void DrawStatusHud()
-        {
-            float width = Mathf.Min(460f, Mathf.Max(260f, Screen.width - 36f));
-            Rect panelRect = new Rect(18f, Mathf.Max(18f, Screen.height - 84f), width, 66f);
-            Rect bridgeRect = new Rect(panelRect.x + 10f, panelRect.y + 10f, panelRect.width - 20f, 22f);
-            Rect threadRect = new Rect(panelRect.x + 10f, panelRect.y + 34f, panelRect.width - 20f, 22f);
-            Color previousColor = GUI.color;
-
-            GUI.color = new Color(0.01f, 0.07f, 0.1f, 0.72f);
-            GUI.DrawTexture(panelRect, Texture2D.whiteTexture);
-            GUI.color = new Color(0.24f, 0.9f, 0.98f, 0.38f);
-            GUI.DrawTexture(new Rect(panelRect.x, panelRect.yMax - 2f, panelRect.width, 2f), Texture2D.whiteTexture);
-            GUI.color = previousColor;
-
-            GUI.Label(bridgeRect, Shorten(directorStatusLine, 80), hudLabelStyle);
-            GUI.Label(threadRect, Shorten(nearestThreadTitle, 42) + " - " + Shorten(nearestThreadPhase, 42), hudStrongStyle);
-            DrawNiaVoiceHud();
-        }
-
-        private void DrawNiaVoiceHud()
-        {
-            string status = Shorten(niaStatusLine, 96);
-            string result = CleanHudText(lastNiaInsight, 180);
-            bool hasResult = !string.IsNullOrWhiteSpace(result);
-            float width = Mathf.Min(640f, Mathf.Max(280f, Screen.width - 36f));
-            float height = hasResult ? 106f : 58f;
-            Rect panelRect = new Rect((Screen.width - width) * 0.5f, 18f, width, height);
-            Rect statusRect = new Rect(panelRect.x + 14f, panelRect.y + 10f, panelRect.width - 28f, 22f);
-            Rect resultRect = new Rect(panelRect.x + 18f, panelRect.y + 38f, panelRect.width - 36f, panelRect.height - 46f);
-            Color previousColor = GUI.color;
-
-            GUI.color = new Color(0.01f, 0.07f, 0.1f, 0.76f);
-            GUI.DrawTexture(panelRect, Texture2D.whiteTexture);
-            GUI.color = new Color(0.24f, 0.9f, 0.98f, 0.44f);
-            GUI.DrawTexture(new Rect(panelRect.x, panelRect.yMax - 2f, panelRect.width, 2f), Texture2D.whiteTexture);
-            GUI.color = previousColor;
-
-            GUI.Label(statusRect, status, niaHudStatusStyle);
-
-            if (hasResult)
-            {
-                GUI.Label(resultRect, result, niaHudResultStyle);
-            }
         }
 
         private static bool ShouldDrawBubbleMessage(string message)
@@ -1062,7 +978,6 @@ namespace Underwater
         private IEnumerator CaptureRealtimeVoiceQuestion()
         {
             niaVoiceInFlight = true;
-            lastNiaInsight = string.Empty;
             niaVoiceDeviceName = Microphone.devices[0];
             int configuredSampleRate = apiSettings != null
                 ? apiSettings.VoiceSampleRateOr(defaultVoiceSampleRate)
@@ -1075,8 +990,6 @@ namespace Underwater
             AudioClip clip = Microphone.Start(niaVoiceDeviceName, false, maxSeconds, sampleRate);
             float startedAt = Time.realtimeSinceStartup;
             int recordedSamples = 0;
-
-            SetNiaStatus($"Listening on {niaVoiceDeviceName}. Hold V to record.");
 
             while (!niaVoiceStopRequested && Microphone.IsRecording(niaVoiceDeviceName) && Time.realtimeSinceStartup - startedAt < maxSeconds)
             {
@@ -1100,12 +1013,10 @@ namespace Underwater
             if (clip == null || recordedSamples <= sampleRate / 4)
             {
                 niaVoiceInFlight = false;
-                SetNiaStatus("I did not catch enough audio for a question.");
                 yield break;
             }
 
             float[] monoSamples = ExtractMonoSamples(clip, recordedSamples);
-            SetNiaStatus("Realtime is answering...");
             _ = RequestRealtimeVoiceQuestionAsync(monoSamples, sampleRate);
         }
 
@@ -1172,15 +1083,12 @@ namespace Underwater
                     BuildRealtimeAnswerInstructions(),
                     voice,
                     CancellationToken.None);
-                lastNiaInsight = CleanHudText(result.Transcript, 180);
                 PlayNiaAudio(result);
-                SetNiaStatus("Realtime answered.");
             }
             catch (Exception ex)
             {
-                lastNiaInsight = string.Empty;
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                SetNiaStatus($"Voice question unavailable: {Shorten(message, 96)}");
+                Debug.LogWarning($"Voice question unavailable: {Shorten(message, 96)}");
             }
             finally
             {
@@ -1235,11 +1143,6 @@ namespace Underwater
         private void SetWorkThreadStatus(string status)
         {
             workThreadStatusLine = string.IsNullOrWhiteSpace(status) ? string.Empty : status.Trim();
-        }
-
-        private void SetNiaStatus(string status)
-        {
-            niaStatusLine = string.IsNullOrWhiteSpace(status) ? string.Empty : status.Trim();
         }
 
         private int GetNextPersistentWorkThreadNumber()
@@ -1315,23 +1218,6 @@ namespace Underwater
         private static string FormatVector(Vector3 vector)
         {
             return $"({vector.x:F1}, {vector.y:F1}, {vector.z:F1})";
-        }
-
-        private static string CleanHudText(string text, int maxLength)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return string.Empty;
-            }
-
-            string cleaned = text.Replace("\r", " ").Replace("\n", " ").Trim();
-
-            while (cleaned.Contains("  "))
-            {
-                cleaned = cleaned.Replace("  ", " ");
-            }
-
-            return Shorten(cleaned, maxLength);
         }
 
         private void ConfigureLighting()
