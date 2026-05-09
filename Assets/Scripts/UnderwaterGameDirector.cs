@@ -1513,7 +1513,7 @@ namespace Underwater
 
         private bool TryConfigureSceneTerrainWorld()
         {
-            sceneTerrains = FindObjectsByType<Terrain>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            sceneTerrains = FindObjectsByType<Terrain>(FindObjectsInactive.Exclude);
 
             if (sceneTerrains == null || sceneTerrains.Length == 0)
             {
@@ -1646,8 +1646,6 @@ namespace Underwater
                 cameraObject.tag = "MainCamera";
                 cameraObject.AddComponent<AudioListener>();
             }
-
-            Quaternion initialCameraRotation = camera.transform.rotation;
 
             niaVoiceAudioSource = camera.GetComponent<AudioSource>();
 
