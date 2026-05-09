@@ -2228,7 +2228,7 @@ namespace Forest
             {
                 atmosphereSun.enabled = true;
                 atmosphereSun.type = LightType.Directional;
-                atmosphereSun.lightmapBakeType = LightmapBakeType.Realtime;
+                SetRealtimeLightMode(atmosphereSun);
                 atmosphereSun.color = Color.Lerp(sunColor, WeatherTint(atmosphereWeather), Mathf.Clamp01(intensity * 0.18f));
                 atmosphereSun.intensity = sunIntensity * sunWeatherMultiplier;
                 atmosphereSun.transform.rotation = sunRotation;
@@ -2349,7 +2349,7 @@ namespace Forest
             {
                 atmosphereSun.enabled = true;
                 atmosphereSun.type = LightType.Directional;
-                atmosphereSun.lightmapBakeType = LightmapBakeType.Realtime;
+                SetRealtimeLightMode(atmosphereSun);
                 atmosphereSun.shadows = LightShadows.Soft;
                 atmosphereSun.color = sunColor;
                 atmosphereSun.intensity = sunIntensity;
@@ -2573,7 +2573,7 @@ namespace Forest
             }
 
             atmosphereSun.enabled = true;
-            atmosphereSun.lightmapBakeType = LightmapBakeType.Realtime;
+            SetRealtimeLightMode(atmosphereSun);
             RenderSettings.sun = atmosphereSun;
 
             if (atmosphereBloom != null && atmosphereVignette != null && atmosphereColorAdjustments != null)
@@ -3151,13 +3151,27 @@ namespace Forest
             }
 
             sun.enabled = true;
-            sun.lightmapBakeType = LightmapBakeType.Realtime;
+            SetRealtimeLightMode(sun);
             sun.color = new Color(0.53f, 0.82f, 0.94f);
             sun.intensity = 0.52f;
             sun.transform.rotation = Quaternion.Euler(60f, -24f, 0f);
             atmosphereSun = sun;
             RenderSettings.sun = sun;
         }
+
+#if UNITY_EDITOR
+        private static void SetRealtimeLightMode(Light light)
+        {
+            if (light != null)
+            {
+                light.lightmapBakeType = LightmapBakeType.Realtime;
+            }
+        }
+#else
+        private static void SetRealtimeLightMode(Light light)
+        {
+        }
+#endif
 
         private static Light FindDirectionalLight()
         {
