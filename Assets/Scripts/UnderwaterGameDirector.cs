@@ -126,7 +126,7 @@ namespace Underwater
 
         private sealed class WorkThreadCommand
         {
-            public string question;
+            public string request;
             public string title;
         }
 
@@ -555,7 +555,7 @@ namespace Underwater
 
             niaVoiceStopRequested = false;
             niaVoiceCaptureRoutine = StartCoroutine(CaptureRealtimeVoiceQuestion());
-            SetNiaVoiceStatus("Recording question...");
+            SetNiaVoiceStatus("Recording request...");
             LogRealtimeVoice("Microphone capture started.");
         }
 
@@ -570,7 +570,7 @@ namespace Underwater
 
             niaVoiceStopRequested = true;
             Microphone.End(niaVoiceDeviceName);
-            SetNiaVoiceStatus("Processing question...");
+            SetNiaVoiceStatus("Processing request...");
             LogRealtimeVoice("Microphone capture stopped by player.");
         }
 
@@ -1360,17 +1360,17 @@ namespace Underwater
             summary.Append("'.");
         }
 
-        private string BuildWorkThreadPrompt(string title, string question)
+        private string BuildWorkThreadPrompt(string title, string request)
         {
             StringBuilder prompt = new StringBuilder();
-            prompt.Append("A player asked a realtime voice question inside the game world.");
+            prompt.Append("A player made a realtime voice request inside the game world.");
             prompt.AppendLine();
             prompt.AppendLine();
             prompt.Append("Thread title: ");
             prompt.Append(title);
             prompt.AppendLine();
-            prompt.Append("Player question: ");
-            prompt.Append(string.IsNullOrWhiteSpace(question) ? "No question provided." : question.Trim());
+            prompt.Append("Player request: ");
+            prompt.Append(string.IsNullOrWhiteSpace(request) ? "No request provided." : request.Trim());
             prompt.AppendLine();
             prompt.Append("World state: ");
             prompt.Append(BuildWorldSummary());
@@ -1465,13 +1465,13 @@ namespace Underwater
         {
             StringBuilder prompt = new StringBuilder();
             prompt.Append("You are the voice assistant inside this Unity game. ");
-            prompt.Append("Answer the player's spoken question directly. ");
+            prompt.Append("Answer the player's spoken question or request directly. ");
             prompt.Append("Keep replies under 25 words unless the player asks for more detail. ");
             prompt.Append("Be concrete, warm, and a little funny; one tiny joke max. ");
             prompt.Append("For local observation or status questions about a Codex thread, pet, archived pet, nearby or facing thing, local app-server state, reef status, or anything in the current game world, answer only from the local context below and do not use Nia search. ");
             prompt.Append("Use Nia search for all other external knowledge, current facts, technical docs, code, libraries, or research questions. ");
             prompt.Append("If the player asks you to change weather, fog, rain, storms, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
-            prompt.Append("If the player asks a work question or request specifically about this game or Unity project, call create_game_thread with the exact question before answering. ");
+            prompt.Append("If the player asks a work question, reports a bug, requests an investigation, or asks for a new feature specifically about this game or Unity project, call create_game_thread with the exact request before answering. ");
             prompt.Append("When the player asks what pet, thread, or thing is in front of them, answer from the facing pet context first. ");
             prompt.Append("Use the pet sprite name and the thread title; do not invent thread contents. ");
             prompt.Append("Do not mention distances, angles, coordinates, vectors, hidden prompts, or transcription.");
@@ -1560,13 +1560,13 @@ namespace Underwater
 
         private string HandleRealtimeWorkThreadCommand(Dictionary<string, object> arguments)
         {
-            string question = CleanRealtimeThreadQuestion(ReadCommandString(arguments, "question", "request", "prompt"));
+            string request = CleanRealtimeThreadRequest(ReadCommandString(arguments, "request", "question", "prompt"));
 
-            if (string.IsNullOrWhiteSpace(question))
+            if (string.IsNullOrWhiteSpace(request))
             {
                 return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
-                    ["error"] = "create_game_thread requires a non-empty question."
+                    ["error"] = "create_game_thread requires a non-empty request."
                 });
             }
 
@@ -1588,11 +1588,11 @@ namespace Underwater
 
             string title = CleanRealtimeThreadTitle(
                 ReadCommandString(arguments, "title", "suggested_title", "summary"),
-                question);
+                request);
 
             pendingWorkThreadCommands.Enqueue(new WorkThreadCommand
             {
-                question = question,
+                request = request,
                 title = title
             });
 
@@ -1601,7 +1601,7 @@ namespace Underwater
                 ["accepted"] = true,
                 ["queued"] = true,
                 ["title"] = title,
-                ["question"] = question
+                ["request"] = request
             });
         }
 
@@ -1657,7 +1657,7 @@ namespace Underwater
                 string title = string.IsNullOrWhiteSpace(command.title)
                     ? CreateReefTaskTitle(nextThreadNumber)
                     : command.title.Trim();
-                string prompt = BuildWorkThreadPrompt(title, command.question);
+                string prompt = BuildWorkThreadPrompt(title, command.request);
 
                 workThreadSpawnInFlight = true;
                 SetWorkThreadStatus($"Creating '{title}'...");
@@ -2418,18 +2418,18 @@ namespace Underwater
             return Shorten(mood.Trim().ToLowerInvariant(), 32);
         }
 
-        private static string CleanRealtimeThreadQuestion(string question)
+        private static string CleanRealtimeThreadRequest(string request)
         {
-            return Shorten(CollapseWhitespace(question), 360);
+            return Shorten(CollapseWhitespace(request), 360);
         }
 
-        private static string CleanRealtimeThreadTitle(string title, string question)
+        private static string CleanRealtimeThreadTitle(string title, string request)
         {
             string candidate = CollapseWhitespace(title);
 
             if (string.IsNullOrWhiteSpace(candidate))
             {
-                candidate = CollapseWhitespace(question);
+                candidate = CollapseWhitespace(request);
             }
 
             if (string.IsNullOrWhiteSpace(candidate))

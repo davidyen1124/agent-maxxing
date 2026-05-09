@@ -108,7 +108,7 @@ namespace Underwater
 
             string safeVoice = string.IsNullOrWhiteSpace(voice) ? DefaultVoice : voice.Trim();
             string safeInstructions = string.IsNullOrWhiteSpace(instructions)
-                ? "Answer the user's spoken question clearly and briefly."
+                ? "Answer the user's spoken question or request clearly and briefly."
                 : instructions.Trim();
             float[] realtimeSamples = ResampleMono(monoSamples, sampleRate, RealtimeInputSampleRate);
             string base64Audio = Convert.ToBase64String(FloatToPcm16(realtimeSamples));
@@ -344,7 +344,7 @@ namespace Underwater
                             ["turn_detection"] = null
                         }
                     },
-                    ["instructions"] = "You convert short player voice clips into clean text questions for a Unity game assistant."
+                    ["instructions"] = "You convert short player voice clips into clean text requests for a Unity game assistant."
                 }
             };
         }
@@ -461,7 +461,7 @@ namespace Underwater
 
         private string BuildAnswerSessionInstructions()
         {
-            string instructions = "Answer short push-to-talk voice questions for this Unity game.";
+            string instructions = "Answer short push-to-talk voice questions and requests for this Unity game.";
 
             if (CanUseNiaSearch())
             {
@@ -475,7 +475,7 @@ namespace Underwater
 
             if (CanUseWorkThreadCommands())
             {
-                instructions += " When the player asks a work question or request specifically about this game/project, collect their exact question and call create_game_thread before speaking.";
+                instructions += " When the player asks a question, reports a bug, requests an investigation, or asks for a new feature specifically about this game/project, collect their exact request and call create_game_thread before speaking.";
             }
 
             return instructions;
@@ -577,24 +577,24 @@ namespace Underwater
             {
                 ["type"] = "function",
                 ["name"] = "create_game_thread",
-                ["description"] = "Create a Codex work thread from inside this Unity game for a player question or request specifically about this game/project. Use this instead of answering directly when the user wants game-specific work, investigation, debugging, or implementation.",
+                ["description"] = "Create a Codex work thread from inside this Unity game for a player request specifically about this game/project. Use this instead of answering directly when the user wants game-specific work, investigation, debugging, or implementation, including new features.",
                 ["parameters"] = new Dictionary<string, object>
                 {
                     ["type"] = "object",
                     ["properties"] = new Dictionary<string, object>
                     {
-                        ["question"] = new Dictionary<string, object>
+                        ["request"] = new Dictionary<string, object>
                         {
                             ["type"] = "string",
-                            ["description"] = "The player's exact spoken question or request about this game/project."
+                            ["description"] = "The player's exact spoken request about this game/project, including questions, bug reports, investigations, or feature requests."
                         },
                         ["title"] = new Dictionary<string, object>
                         {
                             ["type"] = "string",
-                            ["description"] = "Optional concise thread title based on the player's question."
+                            ["description"] = "Optional concise thread title based on the player's request."
                         }
                     },
-                    ["required"] = new List<object> { "question" }
+                    ["required"] = new List<object> { "request" }
                 }
             };
         }
