@@ -1609,6 +1609,17 @@ namespace Underwater
                     break;
             }
 
+            if (usingSceneTerrain)
+            {
+                backgroundColor = Color.Lerp(backgroundColor, new Color(0.025f, 0.15f, 0.21f), 0.35f);
+                fogColor = Color.Lerp(fogColor, new Color(0.04f, 0.18f, 0.23f), 0.4f);
+                ambientSky = Color.Lerp(ambientSky, new Color(0.16f, 0.32f, 0.38f), 0.55f);
+                ambientEquator = Color.Lerp(ambientEquator, new Color(0.11f, 0.25f, 0.28f), 0.55f);
+                ambientGround = Color.Lerp(ambientGround, new Color(0.045f, 0.085f, 0.095f), 0.45f);
+                sunIntensity = Mathf.Max(sunIntensity, atmosphereTimeOfDay == "night" ? 0.45f : 1.35f);
+                baseFogDensity = Mathf.Min(baseFogDensity, atmosphereTimeOfDay == "night" ? 0.011f : 0.0075f);
+            }
+
             float weatherFogBoost = WeatherFogBoost(atmosphereWeather, intensity);
             float sunWeatherMultiplier = WeatherSunMultiplier(atmosphereWeather, intensity);
 
