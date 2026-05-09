@@ -444,6 +444,11 @@ namespace Underwater
 
         private string BuildBubbleMessage()
         {
+            if (!ShouldShowBubbleMessage(statusMessage))
+            {
+                return string.Empty;
+            }
+
             return ShouldShowTitleProgress(statusMessage) ? BuildTitleProgressMessage() : statusMessage;
         }
 
@@ -471,13 +476,23 @@ namespace Underwater
         {
             switch ((message ?? string.Empty).Trim().ToLowerInvariant())
             {
-                case "":
-                case "idle":
                 case "thinking":
-                case "info":
                     return true;
                 default:
                     return false;
+            }
+        }
+
+        private static bool ShouldShowBubbleMessage(string message)
+        {
+            switch ((message ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "":
+                case "idle":
+                case "info":
+                    return false;
+                default:
+                    return true;
             }
         }
     }

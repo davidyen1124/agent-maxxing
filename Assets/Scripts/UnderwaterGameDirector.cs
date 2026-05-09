@@ -667,7 +667,7 @@ namespace Underwater
 
         private void DrawNameTag(Camera camera, string message, Vector3 worldAnchor)
         {
-            if (camera == null || string.IsNullOrWhiteSpace(message))
+            if (camera == null || !ShouldDrawBubbleMessage(message))
             {
                 return;
             }
@@ -697,6 +697,12 @@ namespace Underwater
             GUI.Box(shadowRect, GUIContent.none, speechBubbleShadowStyle);
             GUI.Box(tagRect, GUIContent.none, speechBubbleStyle);
             GUI.Label(tagRect, content, threadTagStyle);
+        }
+
+        private static bool ShouldDrawBubbleMessage(string message)
+        {
+            return !string.IsNullOrWhiteSpace(message)
+                && !string.Equals(message.Trim(), "Idle", StringComparison.OrdinalIgnoreCase);
         }
 
         private void DrawLoadingOverlay()

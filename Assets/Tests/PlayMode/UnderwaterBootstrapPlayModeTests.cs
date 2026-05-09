@@ -30,7 +30,7 @@ namespace Underwater.Tests
         }
 
         [Test]
-        public void ThreadPetBubbleUsesTitleForGenericStatus()
+        public void ThreadPetBubbleHidesIdleAndShowsRealMessage()
         {
             GameObject gameObject = new GameObject("Thread Pet Test");
             ThreadPetAI pet = gameObject.AddComponent<ThreadPetAI>();
@@ -41,11 +41,11 @@ namespace Underwater.Tests
                 {
                     id = "thread-1",
                     title = "Review recent conversations",
-                    statusMessage = "Thinking",
-                    phase = "working"
+                    statusMessage = "Idle",
+                    phase = "idle"
                 });
 
-                Assert.That(pet.BubbleMessage, Is.EqualTo("Review recent conversations..."));
+                Assert.That(pet.BubbleMessage, Is.Empty);
 
                 pet.ApplySnapshot(new AquariumThreadSnapshot
                 {
