@@ -129,7 +129,7 @@ public class SceneAnnotationEditor : Editor
 
     private static List<SceneAnnotation> GetSceneAnnotations()
     {
-        var annotationList = new List<SceneAnnotation>(FindObjectsByType<SceneAnnotation>(FindObjectsSortMode.None));
+        var annotationList = new List<SceneAnnotation>(FindObjectsByType<SceneAnnotation>());
         annotationList.Sort();
         return annotationList;
     }
