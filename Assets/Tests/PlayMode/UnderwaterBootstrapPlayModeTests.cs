@@ -30,7 +30,7 @@ namespace Underwater.Tests
         }
 
         [Test]
-        public void ThreadPetBubbleHidesIdleAndShowsRealMessage()
+        public void ThreadPetBubbleShowsIdleTitleAndRunningMessage()
         {
             GameObject gameObject = new GameObject("Thread Pet Test");
             ThreadPetAI pet = gameObject.AddComponent<ThreadPetAI>();
@@ -45,7 +45,7 @@ namespace Underwater.Tests
                     phase = "idle"
                 });
 
-                Assert.That(pet.BubbleMessage, Is.Empty);
+                Assert.That(pet.BubbleMessage, Is.EqualTo("Review recent conversations"));
 
                 pet.ApplySnapshot(new AquariumThreadSnapshot
                 {
@@ -56,6 +56,41 @@ namespace Underwater.Tests
                 });
 
                 Assert.That(pet.BubbleMessage, Is.EqualTo("Comparing implementation options"));
+
+                pet.ApplySnapshot(new AquariumThreadSnapshot
+                {
+                    id = "thread-1",
+                    title = "Review recent conversations",
+                    statusMessage = "Thinking",
+                    phase = "working"
+                });
+
+                Assert.That(pet.BubbleMessage, Is.EqualTo("Thinking"));
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
+        public void ThreadPetRandomActionsNeverChooseFailure()
+        {
+            GameObject gameObject = new GameObject("Thread Pet Random Action Test");
+            ThreadPetAI pet = gameObject.AddComponent<ThreadPetAI>();
+
+            try
+            {
+                MethodInfo method = typeof(ThreadPetAI).GetMethod(
+                    "PickRandomActionState",
+                    BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(method, Is.Not.Null);
+
+                for (int i = 0; i < 200; i++)
+                {
+                    object state = method.Invoke(pet, null);
+                    Assert.That(state, Is.Not.EqualTo(CodexPetAnimationState.Failed));
+                }
             }
             finally
             {

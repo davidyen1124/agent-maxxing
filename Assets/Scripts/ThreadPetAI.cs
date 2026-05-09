@@ -47,6 +47,8 @@ namespace Underwater
 
         public string BubbleMessage => BuildBubbleMessage();
 
+        public Vector3 BubbleAnchorWorldPosition => transform.position + (Vector3.up * (ActiveAnimalHeight + 0.65f));
+
         public string Phase => phase;
 
         public Vector3 Velocity => velocity;
@@ -89,7 +91,7 @@ namespace Underwater
                 return false;
             }
 
-            petVisual.SetState(GetPetState(), velocity, dashTimer > 0f);
+            petVisual.SetState(GetPetState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
 
             SphereCollider collider = gameObject.AddComponent<SphereCollider>();
             collider.radius = 0.85f;
@@ -117,7 +119,7 @@ namespace Underwater
                     : director.ClampPoint(snapshot.position.ToVector3(), 3f);
             }
 
-            petVisual?.SetState(GetPetState(), velocity, dashTimer > 0f);
+            petVisual?.SetState(GetPetState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
         }
 
         public AquariumThreadSnapshot CreateSnapshot()
@@ -160,8 +162,9 @@ namespace Underwater
 
             AddBuoyancyBand(buoyancyTarget, 0.22f);
             MoveThread(desiredVelocity, GetAcceleration(), 4.1f, 1.4f);
+            FacePlayerWhenImportant();
             chaosImpulse = Vector3.Lerp(chaosImpulse, Vector3.zero, Time.deltaTime * 2.2f);
-            petVisual?.SetState(GetPetState(), velocity, dashTimer > 0f);
+            petVisual?.SetState(GetPetState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
         }
 
         private void ConfigurePersonality()
@@ -199,9 +202,9 @@ namespace Underwater
             {
                 dashTimer = Random.Range(0.18f, 0.85f);
                 dashMultiplier = Random.Range(1.6f, 2.8f);
-                nextDashTimer = Random.Range(0.7f, 5.5f);
-                chaosImpulse = Random.insideUnitSphere * Random.Range(3f, 9f);
-                chaosImpulse.y = ShouldUseTerrainGrounding() ? 0f : Random.Range(-2.5f, 4.5f);
+                nextDashTimer = IsImportantPhase() ? Random.Range(2.8f, 7.5f) : Random.Range(0.7f, 5.5f);
+                chaosImpulse = Random.insideUnitSphere * (IsImportantPhase() ? Random.Range(0.8f, 2.4f) : Random.Range(3f, 9f));
+                chaosImpulse.y = ShouldUseTerrainGrounding() ? 0f : Random.Range(-2.5f, IsImportantPhase() ? 1.8f : 4.5f);
                 moveMode = (ChaosMoveMode)Random.Range(0, 6);
                 PickNextTarget();
             }
@@ -240,9 +243,9 @@ namespace Underwater
                     focusPoint = Camera.main.transform.position + (cameraForward.normalized * Random.Range(4f, 11f));
                     circle = Random.insideUnitCircle * Random.Range(1.2f, 5.5f);
                 }
-                else if (phase == "responding" || phase == "fresh")
+                else if (phase == "responding" || phase == "working" || phase == "fresh")
                 {
-                    focusPoint = Vector3.Lerp(homePosition, playerPosition, 0.45f);
+                    focusPoint = Vector3.Lerp(homePosition, playerPosition, 0.65f);
                 }
             }
 
@@ -280,11 +283,11 @@ namespace Underwater
             switch (phase)
             {
                 case "responding":
-                    return 4.4f * personalitySpeed * GetDashMultiplier();
+                    return 1.8f * personalitySpeed * GetDashMultiplier();
                 case "working":
-                    return 3.3f * personalitySpeed * GetDashMultiplier();
+                    return 1.35f * personalitySpeed * GetDashMultiplier();
                 case "fresh":
-                    return 3.8f * personalitySpeed * GetDashMultiplier();
+                    return 1.65f * personalitySpeed * GetDashMultiplier();
                 default:
                     return 2.2f * personalitySpeed * GetDashMultiplier();
             }
@@ -295,9 +298,9 @@ namespace Underwater
             switch (phase)
             {
                 case "responding":
-                    return 8.6f * personalityAcceleration * GetDashMultiplier();
+                    return 4.2f * personalityAcceleration * GetDashMultiplier();
                 case "working":
-                    return 6.2f * personalityAcceleration * GetDashMultiplier();
+                    return 3.4f * personalityAcceleration * GetDashMultiplier();
                 default:
                     return 4.8f * personalityAcceleration * GetDashMultiplier();
             }
@@ -308,9 +311,9 @@ namespace Underwater
             switch (phase)
             {
                 case "responding":
-                    return 5f;
+                    return 3.2f;
                 case "working":
-                    return 7f;
+                    return 3.8f;
                 default:
                     return 10f;
             }
@@ -318,7 +321,12 @@ namespace Underwater
 
         private float GetDashMultiplier()
         {
-            return dashTimer > 0f ? dashMultiplier : 1f;
+            if (dashTimer <= 0f)
+            {
+                return 1f;
+            }
+
+            return IsImportantPhase() ? Mathf.Lerp(1f, dashMultiplier, 0.25f) : dashMultiplier;
         }
 
         private float GetVerticalBias()
@@ -371,8 +379,9 @@ namespace Underwater
                 : Vector3.zero;
 
             MoveGroundedThread(desiredVelocity + horizontalImpulse, GetAcceleration(), 7.2f, 1.4f);
+            FacePlayerWhenImportant();
             chaosImpulse = Vector3.Lerp(chaosImpulse, Vector3.zero, Time.deltaTime * 2.2f);
-            petVisual?.SetState(GetPetState(), velocity, dashTimer > 0f);
+            petVisual?.SetState(GetPetState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
         }
 
         private void MoveGroundedThread(Vector3 desiredVelocity, float acceleration, float turnSpeed, float clampPadding)
@@ -411,6 +420,23 @@ namespace Underwater
 
         private CodexPetAnimationState GetPetState()
         {
+            if (IsFailurePhase())
+            {
+                return CodexPetAnimationState.Failed;
+            }
+
+            if (IsImportantPhase())
+            {
+                switch (phase)
+                {
+                    case "fresh":
+                    case "responding":
+                        return CodexPetAnimationState.Waving;
+                    case "working":
+                        return CodexPetAnimationState.Review;
+                }
+            }
+
             if (actionTimer > 0f)
             {
                 return actionState;
@@ -423,11 +449,8 @@ namespace Underwater
 
             switch (phase)
             {
-                case "failed":
-                case "failure":
-                case "error":
                 case "warning":
-                    return CodexPetAnimationState.Failed;
+                    return CodexPetAnimationState.Review;
                 case "fresh":
                     return CodexPetAnimationState.Jumping;
                 case "responding":
@@ -489,11 +512,6 @@ namespace Underwater
                 return CodexPetAnimationState.Waiting;
             }
 
-            if (roll < 66)
-            {
-                return CodexPetAnimationState.Failed;
-            }
-
             if (roll < 82)
             {
                 return GetDirectionalRunState();
@@ -524,43 +542,67 @@ namespace Underwater
 
         private string BuildBubbleMessage()
         {
+            if (string.Equals(phase, "idle", System.StringComparison.OrdinalIgnoreCase))
+            {
+                return string.IsNullOrWhiteSpace(title) ? "Untitled thread" : title.Trim();
+            }
+
             if (!ShouldShowBubbleMessage(statusMessage))
             {
-                return string.Empty;
+                return IsImportantPhase() ? BuildFallbackStatusMessage(phase) : string.Empty;
             }
 
-            return ShouldShowTitleProgress(statusMessage) ? BuildTitleProgressMessage() : statusMessage;
+            return statusMessage;
         }
 
-        private string BuildTitleProgressMessage()
+        private bool IsImportantPhase()
         {
-            string label = string.IsNullOrWhiteSpace(title) ? "Untitled thread" : title.Trim();
-            const int maxLength = 64;
-
-            if (label.EndsWith("...", System.StringComparison.Ordinal))
+            switch (phase)
             {
-                return label.Length <= maxLength ? label : label.Substring(0, maxLength);
+                case "fresh":
+                case "responding":
+                case "working":
+                    return true;
+                default:
+                    return IsFailurePhase();
             }
-
-            int maxTitleLength = Mathf.Max(0, maxLength - 3);
-
-            if (label.Length > maxTitleLength)
-            {
-                label = label.Substring(0, maxTitleLength).TrimEnd('.', ' ');
-            }
-
-            return label + "...";
         }
 
-        private static bool ShouldShowTitleProgress(string message)
+        private bool IsFailurePhase()
         {
-            switch ((message ?? string.Empty).Trim().ToLowerInvariant())
+            switch (phase)
             {
-                case "thinking":
+                case "failed":
+                case "failure":
+                case "error":
                     return true;
                 default:
                     return false;
             }
+        }
+
+        private bool ShouldForceRun()
+        {
+            return dashTimer > 0f && !IsImportantPhase();
+        }
+
+        private void FacePlayerWhenImportant()
+        {
+            if (!IsImportantPhase() || director == null || director.Player == null)
+            {
+                return;
+            }
+
+            Vector3 direction = director.Player.transform.position - transform.position;
+            direction.y = 0f;
+
+            if (direction.sqrMagnitude < 0.0001f)
+            {
+                return;
+            }
+
+            Quaternion targetRotation = Quaternion.LookRotation(direction.normalized, Vector3.up);
+            transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * 6.5f);
         }
 
         private static bool ShouldShowBubbleMessage(string message)
