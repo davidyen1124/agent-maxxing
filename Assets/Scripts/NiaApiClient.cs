@@ -63,6 +63,7 @@ namespace Underwater
             string searchMode = NormalizeSearchMode(string.IsNullOrWhiteSpace(mode) ? defaultSearchMode : mode);
             Dictionary<string, object> payload = BuildSearchPayload(query.Trim(), searchMode);
             string body = AquariumDirectorBridge.MiniJson.Serialize(payload);
+            Log($"Search request prepared. mode={searchMode}, query=\"{Shorten(query.Trim(), 120)}\", repositories={repositories.Length}, dataSources={dataSources.Length}, maxTokens={maxTokens}");
             string responseBody = await PostJsonAsync($"{baseUrl}/search", body, apiKey, token);
             Dictionary<string, object> response = AquariumDirectorBridge.MiniJson.Deserialize(responseBody) as Dictionary<string, object>;
 
@@ -164,6 +165,7 @@ namespace Underwater
             request.SetRequestHeader("Authorization", $"Bearer {apiKey}");
             request.SetRequestHeader("Content-Type", "application/json");
 
+            Log($"POST {url}");
             UnityWebRequestAsyncOperation operation = request.SendWebRequest();
 
             while (!operation.isDone)
@@ -182,10 +184,22 @@ namespace Underwater
                 string detail = string.IsNullOrWhiteSpace(request.downloadHandler.text)
                     ? request.error
                     : request.downloadHandler.text;
+                LogWarning($"POST failed. status={request.responseCode}, error={Shorten(detail, 240)}");
                 throw new InvalidOperationException($"Nia request failed ({request.responseCode}): {Shorten(detail, 240)}");
             }
 
+            Log($"POST succeeded. status={request.responseCode}, responseBytes={Encoding.UTF8.GetByteCount(request.downloadHandler.text ?? string.Empty)}");
             return request.downloadHandler.text;
+        }
+
+        private static void Log(string message)
+        {
+            Debug.Log($"[NIA API] {message}");
+        }
+
+        private static void LogWarning(string message)
+        {
+            Debug.LogWarning($"[NIA API] {message}");
         }
 
         private static string ReadFirstAnswer(Dictionary<string, object> response)
