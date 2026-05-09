@@ -1,5 +1,4 @@
 * text=auto eol=lf
-
 # Treat Unity YAML assets as text and route merges through Unity Smart Merge.
 *.unity text merge=unityyamlmerge
 *.prefab text merge=unityyamlmerge
@@ -11,10 +10,19 @@
 *.playable text merge=unityyamlmerge
 *.mask text merge=unityyamlmerge
 *.meta text
-
 # Common code and shader files
 *.cs text diff=csharp
 *.shader text
 *.cginc text
 *.hlsl text
 *.compute text
+Assets/TerrainDemoScene_URP/Terrain/Data/*.asset filter=lfs diff=lfs merge=lfs -text
+Assets/TerrainDemoScene_URP/**/*.tiff filter=lfs diff=lfs merge=lfs -text
+Assets/TerrainDemoScene_URP/**/*.exr filter=lfs diff=lfs merge=lfs -text
+Assets/TerrainDemoScene_URP/**/*.png filter=lfs diff=lfs merge=lfs -text
+Assets/TerrainDemoScene_URP/**/*.jpg filter=lfs diff=lfs merge=lfs -text
+Assets/TerrainDemoScene_URP/**/*.jpeg filter=lfs diff=lfs merge=lfs -text
+Assets/TerrainDemoScene_URP/**/*.fbx filter=lfs diff=lfs merge=lfs -text
+Assets/TerrainDemoScene_URP/**/*.tif filter=lfs diff=lfs merge=lfs -text
+Assets/TerrainDemoScene_URP/**/*.hdr filter=lfs diff=lfs merge=lfs -text
+Assets/TerrainDemoScene_URP/**/*.tga filter=lfs diff=lfs merge=lfs -text

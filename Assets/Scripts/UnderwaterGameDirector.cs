@@ -30,6 +30,7 @@ namespace Underwater
         private Material surfaceMaterial;
         private AquariumDirectorBridge aquariumBridge;
         private CodexPetCatalog petCatalog;
+        private Terrain[] sceneTerrains = Array.Empty<Terrain>();
         private Coroutine worldSyncRoutine;
         private QueuedWorldSync queuedWorldSync;
         private int snapshotSequence;
@@ -44,6 +45,7 @@ namespace Underwater
         private bool worldSyncLoading;
         private float worldSyncProgress;
         private string worldSyncStatus = "Loading thread pets";
+        private bool usingSceneTerrain;
 
         private sealed class QueuedWorldSync
         {
@@ -79,9 +81,19 @@ namespace Underwater
 
         private void Start()
         {
-            ConfigureLighting();
-            ConfigurePostProcessing();
-            BuildArena();
+            usingSceneTerrain = TryConfigureSceneTerrainWorld();
+
+            if (usingSceneTerrain)
+            {
+                PrepareImportedTerrainScene();
+            }
+            else
+            {
+                ConfigureLighting();
+                ConfigurePostProcessing();
+                BuildArena();
+            }
+
             CreatePlayer();
             AttachAquariumBridge(false);
             StartCoroutine(LoadCodexPetsThenAttachBridge());
@@ -485,16 +497,56 @@ namespace Underwater
 
         public Vector3 GetRandomMidWaterPoint(float margin = 8f)
         {
-            Vector3 point = GetRandomPoint(margin);
-            point.y = Random.Range(SeaFloorY + 4f, PlayBounds.max.y - 2f);
+            Vector3 point = usingSceneTerrain
+                ? GetRandomTerrainPointNearPlayer(margin, 12f, 42f)
+                : GetRandomPoint(margin);
+
+            if (usingSceneTerrain)
+            {
+                point.y = Mathf.Min(PlayBounds.max.y - 2f, GetSurfaceY(point) + Random.Range(3.5f, 11f));
+            }
+            else
+            {
+                point.y = Random.Range(SeaFloorY + 4f, PlayBounds.max.y - 2f);
+            }
+
             return point;
         }
 
         public Vector3 GetRandomSeafloorPoint(float margin = 5f)
         {
-            Vector3 point = GetRandomPoint(margin);
-            point.y = SeaFloorY + Random.Range(0.45f, 1.15f);
+            Vector3 point = usingSceneTerrain
+                ? GetRandomTerrainPointNearPlayer(margin, 9f, 34f)
+                : GetRandomPoint(margin);
+            point.y = usingSceneTerrain
+                ? GetSurfaceY(point) + Random.Range(0.45f, 1.15f)
+                : SeaFloorY + Random.Range(0.45f, 1.15f);
             return point;
+        }
+
+        private Vector3 GetRandomTerrainPointNearPlayer(float margin, float minRadius, float maxRadius)
+        {
+            Vector3 origin = Player != null
+                ? Player.transform.position
+                : Camera.main != null
+                    ? Camera.main.transform.position
+                    : PlayBounds.center;
+            float angle = Random.Range(0f, Mathf.PI * 2f);
+            float radius = Random.Range(minRadius, maxRadius);
+            Vector3 point = origin + new Vector3(Mathf.Cos(angle) * radius, 0f, Mathf.Sin(angle) * radius);
+            return ClampPoint(point, margin);
+        }
+
+        public float GetSurfaceY(Vector3 point)
+        {
+            Terrain terrain = FindTerrainAt(point);
+
+            if (terrain == null)
+            {
+                return SeaFloorY;
+            }
+
+            return terrain.SampleHeight(point) + terrain.transform.position.y;
         }
 
         public Vector3 ClampPoint(Vector3 point, float padding = 1f)
@@ -1033,6 +1085,86 @@ namespace Underwater
             colorAdjustments.colorFilter.Override(new Color(0.74f, 0.92f, 1f));
         }
 
+        private bool TryConfigureSceneTerrainWorld()
+        {
+            sceneTerrains = FindObjectsByType<Terrain>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+
+            if (sceneTerrains == null || sceneTerrains.Length == 0)
+            {
+                sceneTerrains = Array.Empty<Terrain>();
+                return false;
+            }
+
+            Bounds terrainBounds = default;
+            bool hasBounds = false;
+
+            for (int i = 0; i < sceneTerrains.Length; i++)
+            {
+                Terrain terrain = sceneTerrains[i];
+
+                if (terrain == null || terrain.terrainData == null)
+                {
+                    continue;
+                }
+
+                Vector3 terrainPosition = terrain.transform.position;
+                Vector3 terrainSize = terrain.terrainData.size;
+                Bounds currentBounds = new Bounds(
+                    terrainPosition + (terrainSize * 0.5f),
+                    terrainSize);
+
+                if (hasBounds)
+                {
+                    terrainBounds.Encapsulate(currentBounds.min);
+                    terrainBounds.Encapsulate(currentBounds.max);
+                }
+                else
+                {
+                    terrainBounds = currentBounds;
+                    hasBounds = true;
+                }
+            }
+
+            if (!hasBounds)
+            {
+                return false;
+            }
+
+            float minY = terrainBounds.min.y - 6f;
+            float maxY = terrainBounds.max.y + 70f;
+            Vector3 center = new Vector3(terrainBounds.center.x, (minY + maxY) * 0.5f, terrainBounds.center.z);
+            Vector3 size = new Vector3(terrainBounds.size.x, maxY - minY, terrainBounds.size.z);
+            PlayBounds = new Bounds(center, size);
+            directorStatusLine = $"Using scene terrain world ({sceneTerrains.Length} terrain tile{(sceneTerrains.Length == 1 ? string.Empty : "s")}).";
+            return true;
+        }
+
+        private void PrepareImportedTerrainScene()
+        {
+            Camera camera = Camera.main;
+
+            if (camera != null)
+            {
+                camera.farClipPlane = Mathf.Max(camera.farClipPlane, Mathf.Max(PlayBounds.size.x, PlayBounds.size.z) * 1.5f);
+                camera.fieldOfView = 72f;
+            }
+
+            DisableDemoRoot("VirtualCameras");
+            DisableDemoRoot("Timelines");
+            DisableDemoRoot("UI");
+            DisableDemoRoot("EventSystem");
+        }
+
+        private static void DisableDemoRoot(string objectName)
+        {
+            GameObject demoObject = GameObject.Find(objectName);
+
+            if (demoObject != null)
+            {
+                demoObject.SetActive(false);
+            }
+        }
+
         private void BuildArena()
         {
             GameObject arenaRoot = new GameObject("Runtime Arena");
@@ -1089,8 +1221,14 @@ namespace Underwater
                 cameraObject.AddComponent<AudioListener>();
             }
 
+            Quaternion initialCameraRotation = camera.transform.rotation;
             GameObject playerObject = new GameObject("Player");
-            playerObject.transform.position = new Vector3(0f, 8f, -18f);
+            playerObject.transform.position = GetInitialPlayerPosition(camera);
+
+            if (usingSceneTerrain)
+            {
+                playerObject.transform.rotation = Quaternion.Euler(0f, initialCameraRotation.eulerAngles.y, 0f);
+            }
 
             CharacterController controller = playerObject.AddComponent<CharacterController>();
             controller.radius = 0.48f;
@@ -1102,7 +1240,9 @@ namespace Underwater
             GameObject viewPivotObject = new GameObject("View Pivot");
             viewPivotObject.transform.SetParent(playerObject.transform);
             viewPivotObject.transform.localPosition = new Vector3(0f, 0.62f, 0f);
-            viewPivotObject.transform.localRotation = Quaternion.identity;
+            viewPivotObject.transform.localRotation = usingSceneTerrain
+                ? Quaternion.Euler(NormalizePitch(initialCameraRotation.eulerAngles.x), 0f, 0f)
+                : Quaternion.identity;
 
             camera.transform.SetParent(viewPivotObject.transform);
             camera.transform.localPosition = Vector3.zero;
@@ -1111,6 +1251,70 @@ namespace Underwater
 
             Player = playerObject.AddComponent<UnderwaterPlayerController>();
             Player.Initialize(this, controller, viewPivotObject.transform, camera);
+        }
+
+        private static float NormalizePitch(float pitch)
+        {
+            return Mathf.Clamp(Mathf.Repeat(pitch + 180f, 360f) - 180f, -82f, 82f);
+        }
+
+        private Vector3 GetInitialPlayerPosition(Camera camera)
+        {
+            if (!usingSceneTerrain)
+            {
+                return new Vector3(0f, 8f, -18f);
+            }
+
+            Vector3 position = camera != null
+                ? camera.transform.position
+                : PlayBounds.center;
+
+            position = ClampPoint(position, 4f);
+            position.y = Mathf.Max(position.y, GetSurfaceY(position) + 2.2f);
+            return position;
+        }
+
+        private Terrain FindTerrainAt(Vector3 point)
+        {
+            if (sceneTerrains == null || sceneTerrains.Length == 0)
+            {
+                return null;
+            }
+
+            Terrain closestTerrain = null;
+            float closestDistance = float.MaxValue;
+
+            for (int i = 0; i < sceneTerrains.Length; i++)
+            {
+                Terrain terrain = sceneTerrains[i];
+
+                if (terrain == null || terrain.terrainData == null)
+                {
+                    continue;
+                }
+
+                Vector3 terrainPosition = terrain.transform.position;
+                Vector3 terrainSize = terrain.terrainData.size;
+                bool containsX = point.x >= terrainPosition.x && point.x <= terrainPosition.x + terrainSize.x;
+                bool containsZ = point.z >= terrainPosition.z && point.z <= terrainPosition.z + terrainSize.z;
+
+                if (containsX && containsZ)
+                {
+                    return terrain;
+                }
+
+                float clampedX = Mathf.Clamp(point.x, terrainPosition.x, terrainPosition.x + terrainSize.x);
+                float clampedZ = Mathf.Clamp(point.z, terrainPosition.z, terrainPosition.z + terrainSize.z);
+                float distance = (new Vector2(point.x, point.z) - new Vector2(clampedX, clampedZ)).sqrMagnitude;
+
+                if (distance < closestDistance)
+                {
+                    closestDistance = distance;
+                    closestTerrain = terrain;
+                }
+            }
+
+            return closestTerrain;
         }
 
         private void AttachAquariumBridge(bool autoStart)

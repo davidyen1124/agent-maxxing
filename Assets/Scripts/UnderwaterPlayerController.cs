@@ -27,9 +27,16 @@ namespace Underwater
             characterController = controller;
             viewPivot = pivot;
             yaw = transform.eulerAngles.y;
+            pitch = NormalizeAngle(viewPivot.localEulerAngles.x);
 
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
+        }
+
+        private static float NormalizeAngle(float angle)
+        {
+            angle = Mathf.Repeat(angle + 180f, 360f) - 180f;
+            return Mathf.Clamp(angle, -82f, 82f);
         }
 
         private void Update()

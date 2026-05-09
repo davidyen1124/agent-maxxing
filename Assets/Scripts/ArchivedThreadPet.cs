@@ -42,7 +42,7 @@ namespace Underwater
                 ? snapshot.position.ToVector3()
                 : director.GetRandomSeafloorPoint(6f);
 
-            transform.position = new Vector3(position.x, director.SeaFloorY + 0.18f, position.z);
+            transform.position = new Vector3(position.x, director.GetSurfaceY(position) + 0.18f, position.z);
             basePosition = transform.position;
             seed = Random.Range(0f, 100f);
             nextActionTimer = Random.Range(0.1f, 5f);
@@ -94,7 +94,7 @@ namespace Underwater
                 if (director != null)
                 {
                     basePosition = director.ClampPoint(basePosition, 3f);
-                    basePosition.y = director.SeaFloorY + 0.18f;
+                    basePosition.y = director.GetSurfaceY(basePosition) + 0.18f;
                 }
             }
 
