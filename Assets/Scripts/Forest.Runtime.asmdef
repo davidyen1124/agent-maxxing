@@ -1,11 +1,10 @@
 {
-    "name": "Underwater.PlayModeTests",
-    "rootNamespace": "Underwater.Tests",
+    "name": "Forest.Runtime",
+    "rootNamespace": "Forest",
     "references": [
-        "Underwater.Runtime"
-    ],
-    "optionalUnityReferences": [
-        "TestAssemblies"
+        "Unity.InputSystem",
+        "Unity.RenderPipelines.Core.Runtime",
+        "Unity.RenderPipelines.Universal.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

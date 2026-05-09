@@ -11,9 +11,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
-namespace Underwater
+namespace Forest
 {
-    public sealed class AquariumDirectorBridge : MonoBehaviour
+    public sealed class ForestDirectorBridge : MonoBehaviour
     {
         [SerializeField] private string codexServerUrl = "ws://127.0.0.1:4500";
         [SerializeField] private float reconnectDelaySeconds = 3f;
@@ -25,10 +25,10 @@ namespace Underwater
         private readonly SemaphoreSlim sendGate = new SemaphoreSlim(1, 1);
         private readonly Dictionary<string, PendingWorldThread> pendingWorldThreads = new Dictionary<string, PendingWorldThread>();
         private readonly Dictionary<string, AppServerThreadRecord> mirroredThreads = new Dictionary<string, AppServerThreadRecord>();
-        private readonly Dictionary<string, AquariumArchivedPetSnapshot> mirroredArchivedPets = new Dictionary<string, AquariumArchivedPetSnapshot>();
+        private readonly Dictionary<string, ForestArchivedThreadSnapshot> mirroredArchivedAnimals = new Dictionary<string, ForestArchivedThreadSnapshot>();
         private readonly HashSet<string> subscribedThreadIds = new HashSet<string>();
 
-        private UnderwaterGameDirector director;
+        private ForestGameDirector director;
         private CancellationTokenSource lifecycleCts;
         private Task connectionLoopTask;
         private ClientWebSocket socket;
@@ -61,7 +61,7 @@ namespace Underwater
 
         public bool IsConnected => codexConnected && appServerSocketOpen;
 
-        public void Initialize(UnderwaterGameDirector owningDirector)
+        public void Initialize(ForestGameDirector owningDirector)
         {
             director = owningDirector;
         }
@@ -113,7 +113,7 @@ namespace Underwater
 
             pendingWorldThreads.Clear();
             mirroredThreads.Clear();
-            mirroredArchivedPets.Clear();
+            mirroredArchivedAnimals.Clear();
             subscribedThreadIds.Clear();
             bootstrapInFlight = false;
 
@@ -141,14 +141,14 @@ namespace Underwater
                 throw new InvalidOperationException("Codex app-server is not connected.");
             }
 
-            string safeTitle = string.IsNullOrWhiteSpace(title) ? "Game work item" : title.Trim();
+            string safeTitle = string.IsNullOrWhiteSpace(title) ? "Forest work item" : title.Trim();
             SetStatus("acting", $"Creating task '{safeTitle}'");
 
             Dictionary<string, object> threadStartParameters = new Dictionary<string, object>
             {
-                ["serviceName"] = "game_work_thread",
+                ["serviceName"] = "forest_work_thread",
                 ["baseInstructions"] =
-                    "You are a Codex work thread spawned from the game world. " +
+                    "You are a Codex work thread spawned from the Forest game. " +
                     "Stay focused on the task that created this thread. " +
                     "Use the current workspace when relevant.",
                 ["threadSource"] = "user",
@@ -249,7 +249,7 @@ namespace Underwater
                         appServerSocketOpen = false;
                         codexConnected = false;
                         SetStatus("reconnecting", $"Codex reconnect pending: {ex.Message}");
-                        Debug.LogError($"[AquariumDirectorBridge] Connection loop failure: {ex}");
+                        Debug.LogError($"[ForestDirectorBridge] Connection loop failure: {ex}");
                     });
                 }
                 finally
@@ -292,8 +292,8 @@ namespace Underwater
                 {
                     ["clientInfo"] = new Dictionary<string, object>
                     {
-                        ["name"] = "game_unity_client",
-                        ["title"] = "Unity Game Client",
+                        ["name"] = "forest_unity_client",
+                        ["title"] = "Forest Unity Client",
                         ["version"] = "0.1.0"
                     },
                     ["capabilities"] = new Dictionary<string, object>
@@ -370,7 +370,7 @@ namespace Underwater
                         director.UpdateBridgeState("warning", $"Thread mirror failed: {ex.Message}");
                     }
 
-                    Debug.LogError($"[AquariumDirectorBridge] Thread mirror failed: {ex}");
+                    Debug.LogError($"[ForestDirectorBridge] Thread mirror failed: {ex}");
                 });
             }
         }
@@ -402,7 +402,7 @@ namespace Underwater
             List<string> resolvedPendingIds = new List<string>();
 
             mirroredThreads.Clear();
-            mirroredArchivedPets.Clear();
+            mirroredArchivedAnimals.Clear();
 
             for (int i = 0; i < appThreads.Count; i++)
             {
@@ -426,7 +426,7 @@ namespace Underwater
                     continue;
                 }
 
-                mirroredArchivedPets[record.id] = CreateArchivedPetSnapshot(record);
+                mirroredArchivedAnimals[record.id] = CreateArchivedAnimalSnapshot(record);
             }
 
             foreach (KeyValuePair<string, PendingWorldThread> pair in pendingWorldThreads)
@@ -505,7 +505,7 @@ namespace Underwater
                 EnqueueMainThread(() =>
                 {
                     subscribedThreadIds.Remove(threadId);
-                    Debug.LogWarning($"[AquariumDirectorBridge] Could not subscribe to Codex thread '{threadId}': {ex.Message}");
+                    Debug.LogWarning($"[ForestDirectorBridge] Could not subscribe to Codex thread '{threadId}': {ex.Message}");
                 });
             }
         }
@@ -518,20 +518,20 @@ namespace Underwater
             }
 
             mirroredThreads[record.id] = record;
-            mirroredArchivedPets.Remove(record.id);
+            mirroredArchivedAnimals.Remove(record.id);
             pendingWorldThreads.Remove(record.id);
         }
 
         private void SyncPendingWorldThreads(string connectionLabel)
         {
-            List<AquariumThreadSnapshot> liveThreads = new List<AquariumThreadSnapshot>();
-            List<AquariumArchivedPetSnapshot> archivedPets = new List<AquariumArchivedPetSnapshot>();
+            List<ForestThreadSnapshot> liveThreads = new List<ForestThreadSnapshot>();
+            List<ForestArchivedThreadSnapshot> archivedAnimals = new List<ForestArchivedThreadSnapshot>();
 
             AddPendingThreadSnapshots(liveThreads, new HashSet<string>());
-            SortAndSyncWorld(liveThreads, archivedPets, connectionLabel);
+            SortAndSyncWorld(liveThreads, archivedAnimals, connectionLabel);
         }
 
-        private void AddPendingThreadSnapshots(List<AquariumThreadSnapshot> liveThreads, HashSet<string> knownThreadIds)
+        private void AddPendingThreadSnapshots(List<ForestThreadSnapshot> liveThreads, HashSet<string> knownThreadIds)
         {
             foreach (KeyValuePair<string, PendingWorldThread> pair in pendingWorldThreads)
             {
@@ -547,7 +547,7 @@ namespace Underwater
                     DateTime.TryParse(pair.Value.createdAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out createdAt);
                 }
 
-                liveThreads.Add(new AquariumThreadSnapshot
+                liveThreads.Add(new ForestThreadSnapshot
                 {
                     id = pair.Value.id,
                     title = pair.Value.title,
@@ -566,8 +566,8 @@ namespace Underwater
                 return;
             }
 
-            List<AquariumThreadSnapshot> liveThreads = new List<AquariumThreadSnapshot>(mirroredThreads.Count + pendingWorldThreads.Count);
-            List<AquariumArchivedPetSnapshot> archivedPets = new List<AquariumArchivedPetSnapshot>(mirroredArchivedPets.Count);
+            List<ForestThreadSnapshot> liveThreads = new List<ForestThreadSnapshot>(mirroredThreads.Count + pendingWorldThreads.Count);
+            List<ForestArchivedThreadSnapshot> archivedAnimals = new List<ForestArchivedThreadSnapshot>(mirroredArchivedAnimals.Count);
             HashSet<string> knownThreadIds = new HashSet<string>();
 
             foreach (KeyValuePair<string, AppServerThreadRecord> pair in mirroredThreads)
@@ -581,19 +581,19 @@ namespace Underwater
                 liveThreads.Add(CreateThreadSnapshot(pair.Value));
             }
 
-            foreach (KeyValuePair<string, AquariumArchivedPetSnapshot> pair in mirroredArchivedPets)
+            foreach (KeyValuePair<string, ForestArchivedThreadSnapshot> pair in mirroredArchivedAnimals)
             {
                 if (pair.Value != null)
                 {
-                    archivedPets.Add(pair.Value);
+                    archivedAnimals.Add(pair.Value);
                 }
             }
 
             AddPendingThreadSnapshots(liveThreads, knownThreadIds);
-            SortAndSyncWorld(liveThreads, archivedPets, connectionLabel);
+            SortAndSyncWorld(liveThreads, archivedAnimals, connectionLabel);
         }
 
-        private void SortAndSyncWorld(List<AquariumThreadSnapshot> liveThreads, List<AquariumArchivedPetSnapshot> archivedPets, string connectionLabel)
+        private void SortAndSyncWorld(List<ForestThreadSnapshot> liveThreads, List<ForestArchivedThreadSnapshot> archivedAnimals, string connectionLabel)
         {
             if (director == null)
             {
@@ -611,18 +611,18 @@ namespace Underwater
 
                 return string.CompareOrdinal(left.title, right.title);
             });
-            archivedPets.Sort((left, right) => string.CompareOrdinal(left.title, right.title));
+            archivedAnimals.Sort((left, right) => string.CompareOrdinal(left.title, right.title));
 
-            string detail = $"{connectionLabel} Mirroring {liveThreads.Count} active threads and {archivedPets.Count} archived pets.";
-            director.SyncThreadWorld(liveThreads, archivedPets, detail);
+            string detail = $"{connectionLabel} Mirroring {liveThreads.Count} active threads and {archivedAnimals.Count} archived animals.";
+            director.SyncThreadWorld(liveThreads, archivedAnimals, detail);
             director.UpdateBridgeState(codexConnected ? "ready" : "offline", detail);
         }
 
-        private AquariumThreadSnapshot CreateThreadSnapshot(AppServerThreadRecord record)
+        private ForestThreadSnapshot CreateThreadSnapshot(AppServerThreadRecord record)
         {
             float ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - record.updatedAtUtc).TotalMinutes);
 
-            return new AquariumThreadSnapshot
+            return new ForestThreadSnapshot
             {
                 id = record.id,
                 title = record.title,
@@ -633,9 +633,9 @@ namespace Underwater
             };
         }
 
-        private static AquariumArchivedPetSnapshot CreateArchivedPetSnapshot(AppServerThreadRecord record)
+        private static ForestArchivedThreadSnapshot CreateArchivedAnimalSnapshot(AppServerThreadRecord record)
         {
-            return new AquariumArchivedPetSnapshot
+            return new ForestArchivedThreadSnapshot
             {
                 id = record.id,
                 title = record.title,
@@ -1510,12 +1510,12 @@ namespace Underwater
 
             if (mirroredThreads.TryGetValue(threadId, out AppServerThreadRecord record))
             {
-                mirroredArchivedPets[threadId] = CreateArchivedPetSnapshot(record);
+                mirroredArchivedAnimals[threadId] = CreateArchivedAnimalSnapshot(record);
                 mirroredThreads.Remove(threadId);
             }
             else
             {
-                mirroredArchivedPets[threadId] = new AquariumArchivedPetSnapshot
+                mirroredArchivedAnimals[threadId] = new ForestArchivedThreadSnapshot
                 {
                     id = threadId,
                     title = Shorten(threadId, 12),
@@ -1537,13 +1537,13 @@ namespace Underwater
                 return;
             }
 
-            if (mirroredArchivedPets.TryGetValue(threadId, out AquariumArchivedPetSnapshot archivedPet))
+            if (mirroredArchivedAnimals.TryGetValue(threadId, out ForestArchivedThreadSnapshot archivedAnimal))
             {
-                mirroredArchivedPets.Remove(threadId);
+                mirroredArchivedAnimals.Remove(threadId);
                 UpsertMirroredThread(new AppServerThreadRecord
                 {
                     id = threadId,
-                    title = archivedPet.title,
+                    title = archivedAnimal.title,
                     statusMessage = "Idle",
                     phase = "idle",
                     updatedAtUtc = DateTime.UtcNow,
@@ -1628,7 +1628,7 @@ namespace Underwater
                 source = "app-server"
             };
             mirroredThreads[record.id] = record;
-            mirroredArchivedPets.Remove(record.id);
+            mirroredArchivedAnimals.Remove(record.id);
             pendingWorldThreads.Remove(record.id);
             return record;
         }
@@ -1780,7 +1780,7 @@ namespace Underwater
 
             if (changed && ShouldLogStatus(lastCodexPhase))
             {
-                Debug.Log($"[AquariumDirectorBridge] Status -> {lastCodexPhase}: {lastCodexText}");
+                Debug.Log($"[ForestDirectorBridge] Status -> {lastCodexPhase}: {lastCodexText}");
             }
         }
 

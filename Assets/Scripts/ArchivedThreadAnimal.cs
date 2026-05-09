@@ -1,21 +1,21 @@
 using UnityEngine;
 
-namespace Underwater
+namespace Forest
 {
-    public sealed class ArchivedThreadPet : MonoBehaviour
+    public sealed class ArchivedThreadAnimal : MonoBehaviour
     {
         private const float ArchivedAnimalHeight = 1f;
         private const float TerrainGroundOffset = 0.05f;
 
-        private ThreadPetAnimalVisual petVisual;
-        private UnderwaterGameDirector director;
+        private ThreadAnimalVisual animalVisual;
+        private ForestGameDirector director;
         private Vector3 basePosition;
         private float seed;
         private float nextActionTimer;
         private float actionTimer;
         private float hopTimer;
         private float idleBobFrequency;
-        private CodexPetAnimationState actionState = CodexPetAnimationState.Waiting;
+        private CodexAnimalAnimationState actionState = CodexAnimalAnimationState.Waiting;
         private string threadId = string.Empty;
         private string title = "Untitled thread";
         private string statusMessage = "Archived";
@@ -26,11 +26,11 @@ namespace Underwater
 
         public string StatusMessage => statusMessage;
 
-        public string PetId => petVisual != null ? petVisual.PetId : "unknown-pet";
+        public string AnimalId => animalVisual != null ? animalVisual.AnimalId : "unknown-animal";
 
-        public string PetDisplayName => petVisual != null ? petVisual.PetDisplayName : PetId;
+        public string AnimalDisplayName => animalVisual != null ? animalVisual.AnimalDisplayName : AnimalId;
 
-        public bool Initialize(UnderwaterGameDirector director, AquariumArchivedPetSnapshot snapshot)
+        public bool Initialize(ForestGameDirector director, ForestArchivedThreadSnapshot snapshot)
         {
             this.director = director;
             threadId = snapshot != null ? snapshot.id ?? string.Empty : string.Empty;
@@ -39,7 +39,7 @@ namespace Underwater
 
             Vector3 position = snapshot != null && snapshot.position != null
                 ? snapshot.position.ToVector3()
-                : director.GetRandomSeafloorPoint(6f);
+                : director.GetRandomGroundPoint(6f);
 
             transform.position = new Vector3(position.x, director.GetSurfaceY(position) + TerrainGroundOffset, position.z);
             basePosition = transform.position;
@@ -47,21 +47,21 @@ namespace Underwater
             nextActionTimer = Random.Range(0.1f, 5f);
             hopTimer = Random.Range(0f, 1.5f);
             idleBobFrequency = Random.Range(0.8f, 1.7f);
-            petVisual = ThreadPetAnimalVisual.Create(transform, threadId, ArchivedAnimalHeight);
+            animalVisual = ThreadAnimalVisual.Create(transform, threadId, ArchivedAnimalHeight);
 
-            if (petVisual == null)
+            if (animalVisual == null)
             {
-                Debug.LogWarning("[ArchivedThreadPet] No 3D animal prefab is available; archived pet will not be created.");
+                Debug.LogWarning("[ArchivedThreadAnimal] No 3D animal prefab is available; archived animal will not be created.");
                 return false;
             }
 
-            petVisual.SetState(CodexPetAnimationState.Waiting, Vector3.zero, false);
+            animalVisual.SetState(CodexAnimalAnimationState.Waiting, Vector3.zero, false);
             return true;
         }
 
-        public AquariumArchivedPetSnapshot CreateSnapshot()
+        public ForestArchivedThreadSnapshot CreateSnapshot()
         {
-            return new AquariumArchivedPetSnapshot
+            return new ForestArchivedThreadSnapshot
             {
                 id = threadId,
                 title = title,
@@ -81,7 +81,7 @@ namespace Underwater
                 actionState = PickRandomState();
                 actionTimer = Random.Range(0.45f, 2.4f);
                 nextActionTimer = Random.Range(0.35f, 6.5f);
-                petVisual?.SetState(actionState, Vector3.zero, false);
+                animalVisual?.SetState(actionState, Vector3.zero, false);
             }
 
             if (hopTimer <= 0f)
@@ -96,51 +96,51 @@ namespace Underwater
                 }
             }
 
-            float bob = actionState == CodexPetAnimationState.Jumping && actionTimer > 0f
+            float bob = actionState == CodexAnimalAnimationState.Jumping && actionTimer > 0f
                 ? Mathf.Abs(Mathf.Sin(Time.time * 10f + seed)) * 0.55f
                 : Mathf.Sin(Time.time * idleBobFrequency + seed) * 0.08f;
             transform.position = Vector3.Lerp(transform.position, basePosition + Vector3.up * bob, Time.deltaTime * 7f);
 
             if (actionTimer > 0f)
             {
-                petVisual?.SetState(actionState, Vector3.zero, false);
+                animalVisual?.SetState(actionState, Vector3.zero, false);
             }
             else
             {
-                petVisual?.SetState(CodexPetAnimationState.Waiting, Vector3.zero, false);
+                animalVisual?.SetState(CodexAnimalAnimationState.Waiting, Vector3.zero, false);
             }
         }
 
-        private static CodexPetAnimationState PickRandomState()
+        private static CodexAnimalAnimationState PickRandomState()
         {
             int roll = Random.Range(0, 100);
 
             if (roll < 22)
             {
-                return CodexPetAnimationState.Waving;
+                return CodexAnimalAnimationState.Waving;
             }
 
             if (roll < 42)
             {
-                return CodexPetAnimationState.Jumping;
+                return CodexAnimalAnimationState.Jumping;
             }
 
             if (roll < 58)
             {
-                return CodexPetAnimationState.Review;
+                return CodexAnimalAnimationState.Review;
             }
 
             if (roll < 72)
             {
-                return CodexPetAnimationState.Idle;
+                return CodexAnimalAnimationState.Idle;
             }
 
             if (roll < 86)
             {
-                return CodexPetAnimationState.Failed;
+                return CodexAnimalAnimationState.Failed;
             }
 
-            return CodexPetAnimationState.Waiting;
+            return CodexAnimalAnimationState.Waiting;
         }
     }
 }

@@ -1,21 +1,21 @@
 using UnityEngine;
 
-namespace Underwater
+namespace Forest
 {
-    public sealed class ThreadPetAI : MonoBehaviour
+    public sealed class ThreadAnimalAI : MonoBehaviour
     {
         private const float TerrainGroundOffset = 0.05f;
         private const float TerrainTargetArrivalDistance = 0.95f;
         private const float TerrainSurfaceFollowSpeed = 12f;
         private const float ActiveAnimalHeight = 1.4f;
 
-        private UnderwaterGameDirector director;
-        private ThreadPetAnimalVisual petVisual;
+        private ForestGameDirector director;
+        private ThreadAnimalVisual animalVisual;
         private Vector3 velocity;
-        private Vector3 swimTarget;
+        private Vector3 roamTarget;
         private Vector3 homePosition;
         private Vector3 chaosImpulse;
-        private float swimTimer;
+        private float roamTimer;
         private float actionTimer;
         private float nextActionTimer;
         private float dashTimer;
@@ -24,13 +24,12 @@ namespace Underwater
         private float personalitySpeed;
         private float personalityAcceleration;
         private float personalityRoam;
-        private float waveAmplitude;
-        private float waveFrequencyX;
-        private float waveFrequencyY;
-        private float waveFrequencyZ;
+        private float meanderAmplitude;
+        private float meanderFrequencyX;
+        private float meanderFrequencyZ;
         private float targetMinSeconds;
         private float targetMaxSeconds;
-        private CodexPetAnimationState actionState;
+        private CodexAnimalAnimationState actionState;
         private ChaosMoveMode moveMode;
         private float seed;
         private string threadId = string.Empty;
@@ -53,9 +52,9 @@ namespace Underwater
 
         public Vector3 Velocity => velocity;
 
-        public string PetId => petVisual != null ? petVisual.PetId : "unknown-pet";
+        public string AnimalId => animalVisual != null ? animalVisual.AnimalId : "unknown-animal";
 
-        public string PetDisplayName => petVisual != null ? petVisual.PetDisplayName : PetId;
+        public string AnimalDisplayName => animalVisual != null ? animalVisual.AnimalDisplayName : AnimalId;
 
         private enum ChaosMoveMode
         {
@@ -67,31 +66,29 @@ namespace Underwater
             ChaseCamera
         }
 
-        public bool Initialize(UnderwaterGameDirector owningDirector, AquariumThreadSnapshot snapshot)
+        public bool Initialize(ForestGameDirector owningDirector, ForestThreadSnapshot snapshot)
         {
             director = owningDirector;
             seed = Random.Range(0f, 100f);
             Vector3 startPosition = snapshot != null && snapshot.position != null
                 ? snapshot.position.ToVector3()
-                : director.GetRandomMidWaterPoint();
-            transform.position = ShouldUseTerrainGrounding()
-                ? ProjectToTerrainGround(startPosition)
-                : startPosition;
+                : director.GetRandomRoamingPoint();
+            transform.position = ProjectToGround(startPosition);
             homePosition = transform.position;
-            swimTarget = transform.position;
+            roamTarget = transform.position;
             ConfigurePersonality();
 
             ApplySnapshot(snapshot);
 
-            petVisual = ThreadPetAnimalVisual.Create(transform, threadId, ActiveAnimalHeight);
+            animalVisual = ThreadAnimalVisual.Create(transform, threadId, ActiveAnimalHeight);
 
-            if (petVisual == null)
+            if (animalVisual == null)
             {
-                Debug.LogWarning("[ThreadPetAI] No 3D animal prefab is available; thread pet will not be created.");
+                Debug.LogWarning("[ThreadAnimalAI] No 3D animal prefab is available; thread animal will not be created.");
                 return false;
             }
 
-            petVisual.SetState(GetPetState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
+            animalVisual.SetState(GetAnimalState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
 
             SphereCollider collider = gameObject.AddComponent<SphereCollider>();
             collider.radius = 0.85f;
@@ -99,7 +96,7 @@ namespace Underwater
             return true;
         }
 
-        public void ApplySnapshot(AquariumThreadSnapshot snapshot)
+        public void ApplySnapshot(ForestThreadSnapshot snapshot)
         {
             if (snapshot == null)
             {
@@ -114,17 +111,15 @@ namespace Underwater
 
             if (snapshot.position != null)
             {
-                homePosition = ShouldUseTerrainGrounding()
-                    ? ProjectToTerrainGround(snapshot.position.ToVector3(), 3f)
-                    : director.ClampPoint(snapshot.position.ToVector3(), 3f);
+                homePosition = ProjectToGround(snapshot.position.ToVector3(), 3f);
             }
 
-            petVisual?.SetState(GetPetState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
+            animalVisual?.SetState(GetAnimalState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
         }
 
-        public AquariumThreadSnapshot CreateSnapshot()
+        public ForestThreadSnapshot CreateSnapshot()
         {
-            return new AquariumThreadSnapshot
+            return new ForestThreadSnapshot
             {
                 id = threadId,
                 title = title,
@@ -140,31 +135,9 @@ namespace Underwater
         private void Update()
         {
             UpdateChaosTimers();
-            swimTimer -= Time.deltaTime;
+            roamTimer -= Time.deltaTime;
 
-            if (ShouldUseTerrainGrounding())
-            {
-                UpdateGroundedMovement();
-                return;
-            }
-
-            if (swimTimer <= 0f || Vector3.Distance(transform.position, swimTarget) < 1.8f)
-            {
-                PickNextTarget();
-            }
-
-            Vector3 wave = new Vector3(
-                Mathf.Sin((Time.time * waveFrequencyX) + seed) * waveAmplitude,
-                Mathf.Sin((Time.time * waveFrequencyY) + (seed * 0.7f)) * waveAmplitude * 0.55f,
-                Mathf.Cos((Time.time * waveFrequencyZ) + seed) * waveAmplitude * 0.8f);
-            Vector3 desiredVelocity = (swimTarget + wave + chaosImpulse - transform.position).normalized * GetSwimSpeed();
-            float buoyancyTarget = Mathf.Clamp(homePosition.y + GetVerticalBias(), director.SeaFloorY + 2f, director.PlayBounds.max.y - 2f);
-
-            AddBuoyancyBand(buoyancyTarget, 0.22f);
-            MoveThread(desiredVelocity, GetAcceleration(), 4.1f, 1.4f);
-            FacePlayerWhenImportant();
-            chaosImpulse = Vector3.Lerp(chaosImpulse, Vector3.zero, Time.deltaTime * 2.2f);
-            petVisual?.SetState(GetPetState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
+            UpdateGroundedMovement();
         }
 
         private void ConfigurePersonality()
@@ -172,14 +145,13 @@ namespace Underwater
             personalitySpeed = Random.Range(0.72f, 1.75f);
             personalityAcceleration = Random.Range(0.75f, 1.9f);
             personalityRoam = Random.Range(0.65f, 1.8f);
-            waveAmplitude = Random.Range(0.5f, 2.8f);
-            waveFrequencyX = Random.Range(0.55f, 2.4f);
-            waveFrequencyY = Random.Range(0.45f, 2.1f);
-            waveFrequencyZ = Random.Range(0.55f, 2.8f);
+            meanderAmplitude = Random.Range(0.5f, 2.8f);
+            meanderFrequencyX = Random.Range(0.55f, 2.4f);
+            meanderFrequencyZ = Random.Range(0.55f, 2.8f);
             targetMinSeconds = Random.Range(0.18f, 1.1f);
             targetMaxSeconds = Random.Range(0.85f, 3.8f);
             moveMode = (ChaosMoveMode)Random.Range(0, 6);
-            swimTimer = Random.Range(0.05f, 2.2f);
+            roamTimer = Random.Range(0.05f, 2.2f);
             nextActionTimer = Random.Range(0.15f, 3.8f);
             nextDashTimer = Random.Range(0.2f, 4.2f);
         }
@@ -204,7 +176,7 @@ namespace Underwater
                 dashMultiplier = Random.Range(1.6f, 2.8f);
                 nextDashTimer = IsImportantPhase() ? Random.Range(2.8f, 7.5f) : Random.Range(0.7f, 5.5f);
                 chaosImpulse = Random.insideUnitSphere * (IsImportantPhase() ? Random.Range(0.8f, 2.4f) : Random.Range(3f, 9f));
-                chaosImpulse.y = ShouldUseTerrainGrounding() ? 0f : Random.Range(-2.5f, IsImportantPhase() ? 1.8f : 4.5f);
+                chaosImpulse.y = 0f;
                 moveMode = (ChaosMoveMode)Random.Range(0, 6);
                 PickNextTarget();
             }
@@ -230,14 +202,11 @@ namespace Underwater
                 {
                     Vector3 cameraForward = Camera.main.transform.forward;
 
-                    if (ShouldUseTerrainGrounding())
-                    {
-                        cameraForward.y = 0f;
+                    cameraForward.y = 0f;
 
-                        if (cameraForward.sqrMagnitude < 0.0001f)
-                        {
-                            cameraForward = Camera.main.transform.forward;
-                        }
+                    if (cameraForward.sqrMagnitude < 0.0001f)
+                    {
+                        cameraForward = Camera.main.transform.forward;
                     }
 
                     focusPoint = Camera.main.transform.position + (cameraForward.normalized * Random.Range(4f, 11f));
@@ -249,36 +218,30 @@ namespace Underwater
                 }
             }
 
-            float verticalOffset = Random.Range(-2f, 2f);
+            float verticalOffset = 0f;
 
             switch (moveMode)
             {
                 case ChaosMoveMode.DivePop:
-                    verticalOffset = ShouldUseTerrainGrounding()
-                        ? 0f
-                        : Random.value > 0.5f ? Random.Range(3f, 7f) : Random.Range(-5f, -1.5f);
+                    verticalOffset = 0f;
                     break;
                 case ChaosMoveMode.Spiral:
                     float spiralTime = Time.time * Random.Range(0.7f, 1.6f) + seed;
                     circle += new Vector2(Mathf.Cos(spiralTime), Mathf.Sin(spiralTime)) * Random.Range(2f, 6f);
-                    verticalOffset = ShouldUseTerrainGrounding()
-                        ? 0f
-                        : Mathf.Sin(spiralTime * 1.3f) * Random.Range(1.5f, 4f);
+                    verticalOffset = 0f;
                     break;
                 case ChaosMoveMode.ZigZag:
                     circle = new Vector2(Mathf.Sign(Mathf.Sin(Time.time * 7f + seed)) * roamRadius, Random.Range(-roamRadius, roamRadius));
-                    verticalOffset = ShouldUseTerrainGrounding() ? 0f : Random.Range(-3.5f, 3.5f);
+                    verticalOffset = 0f;
                     break;
             }
 
             Vector3 target = focusPoint + new Vector3(circle.x, verticalOffset, circle.y);
-            swimTarget = ShouldUseTerrainGrounding()
-                ? ProjectToTerrainGround(target, 2f)
-                : director.ClampPoint(target, 2f);
-            swimTimer = Random.Range(targetMinSeconds, Mathf.Max(targetMinSeconds + 0.2f, targetMaxSeconds));
+            roamTarget = ProjectToGround(target, 2f);
+            roamTimer = Random.Range(targetMinSeconds, Mathf.Max(targetMinSeconds + 0.2f, targetMaxSeconds));
         }
 
-        private float GetSwimSpeed()
+        private float GetRoamSpeed()
         {
             switch (phase)
             {
@@ -329,59 +292,31 @@ namespace Underwater
             return IsImportantPhase() ? Mathf.Lerp(1f, dashMultiplier, 0.25f) : dashMultiplier;
         }
 
-        private float GetVerticalBias()
-        {
-            switch (phase)
-            {
-                case "responding":
-                    return 2.6f;
-                case "working":
-                    return 1.3f;
-                default:
-                    return 0.2f;
-            }
-        }
-
-        private void AddBuoyancyBand(float centerHeight, float strength)
-        {
-            float offset = centerHeight - transform.position.y;
-            velocity += Vector3.up * offset * strength * Time.deltaTime;
-        }
-
-        private void MoveThread(Vector3 desiredVelocity, float acceleration, float turnSpeed, float clampPadding)
-        {
-            velocity = Vector3.MoveTowards(velocity, desiredVelocity, acceleration * Time.deltaTime);
-            transform.position += velocity * Time.deltaTime;
-            transform.position = director.ClampPoint(transform.position, clampPadding);
-
-            if (velocity.sqrMagnitude > 0.06f)
-            {
-                Quaternion targetRotation = Quaternion.LookRotation(velocity.normalized, Vector3.up);
-                transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * turnSpeed);
-            }
-        }
-
         private void UpdateGroundedMovement()
         {
-            Vector3 horizontalOffset = swimTarget - transform.position;
+            Vector3 meander = new Vector3(
+                Mathf.Sin((Time.time * meanderFrequencyX) + seed) * meanderAmplitude,
+                0f,
+                Mathf.Cos((Time.time * meanderFrequencyZ) + seed) * meanderAmplitude * 0.8f);
+            Vector3 horizontalOffset = roamTarget + meander - transform.position;
             horizontalOffset.y = 0f;
 
-            if (swimTimer <= 0f || horizontalOffset.sqrMagnitude < TerrainTargetArrivalDistance * TerrainTargetArrivalDistance)
+            if (roamTimer <= 0f || horizontalOffset.sqrMagnitude < TerrainTargetArrivalDistance * TerrainTargetArrivalDistance)
             {
                 PickNextTarget();
-                horizontalOffset = swimTarget - transform.position;
+                horizontalOffset = roamTarget - transform.position;
                 horizontalOffset.y = 0f;
             }
 
             Vector3 horizontalImpulse = new Vector3(chaosImpulse.x, 0f, chaosImpulse.z) * 0.25f;
             Vector3 desiredVelocity = horizontalOffset.sqrMagnitude > 0.0001f
-                ? horizontalOffset.normalized * GetSwimSpeed()
+                ? horizontalOffset.normalized * GetRoamSpeed()
                 : Vector3.zero;
 
             MoveGroundedThread(desiredVelocity + horizontalImpulse, GetAcceleration(), 7.2f, 1.4f);
             FacePlayerWhenImportant();
             chaosImpulse = Vector3.Lerp(chaosImpulse, Vector3.zero, Time.deltaTime * 2.2f);
-            petVisual?.SetState(GetPetState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
+            animalVisual?.SetState(GetAnimalState(), velocity, ShouldForceRun(), IsImportantPhase(), IsFailurePhase());
         }
 
         private void MoveGroundedThread(Vector3 desiredVelocity, float acceleration, float turnSpeed, float clampPadding)
@@ -406,23 +341,18 @@ namespace Underwater
             }
         }
 
-        private Vector3 ProjectToTerrainGround(Vector3 point, float clampPadding = 1.4f)
+        private Vector3 ProjectToGround(Vector3 point, float clampPadding = 1.4f)
         {
             Vector3 clamped = director.ClampPoint(point, clampPadding);
             clamped.y = director.GetSurfaceY(clamped) + TerrainGroundOffset;
             return clamped;
         }
 
-        private bool ShouldUseTerrainGrounding()
-        {
-            return director != null && director.UsesSceneTerrain;
-        }
-
-        private CodexPetAnimationState GetPetState()
+        private CodexAnimalAnimationState GetAnimalState()
         {
             if (IsFailurePhase())
             {
-                return CodexPetAnimationState.Failed;
+                return CodexAnimalAnimationState.Failed;
             }
 
             if (IsImportantPhase())
@@ -431,9 +361,9 @@ namespace Underwater
                 {
                     case "fresh":
                     case "responding":
-                        return CodexPetAnimationState.Waving;
+                        return CodexAnimalAnimationState.Waving;
                     case "working":
-                        return CodexPetAnimationState.Review;
+                        return CodexAnimalAnimationState.Review;
                 }
             }
 
@@ -450,66 +380,66 @@ namespace Underwater
             switch (phase)
             {
                 case "warning":
-                    return CodexPetAnimationState.Review;
+                    return CodexAnimalAnimationState.Review;
                 case "fresh":
-                    return CodexPetAnimationState.Jumping;
+                    return CodexAnimalAnimationState.Jumping;
                 case "responding":
-                    return CodexPetAnimationState.Waving;
+                    return CodexAnimalAnimationState.Waving;
                 case "working":
-                    return CodexPetAnimationState.Review;
+                    return CodexAnimalAnimationState.Review;
                 case "idle":
-                    return velocity.sqrMagnitude > 1.2f ? GetDirectionalRunState() : CodexPetAnimationState.Waiting;
+                    return velocity.sqrMagnitude > 1.2f ? GetDirectionalRunState() : CodexAnimalAnimationState.Waiting;
                 default:
-                    return velocity.sqrMagnitude > 1.2f ? GetDirectionalRunState() : CodexPetAnimationState.Idle;
+                    return velocity.sqrMagnitude > 1.2f ? GetDirectionalRunState() : CodexAnimalAnimationState.Idle;
             }
         }
 
-        private CodexPetAnimationState GetDirectionalRunState()
+        private CodexAnimalAnimationState GetDirectionalRunState()
         {
             Camera camera = Camera.main;
 
             if (camera == null || velocity.sqrMagnitude < 0.0001f)
             {
-                return CodexPetAnimationState.Running;
+                return CodexAnimalAnimationState.Running;
             }
 
             float screenDirection = Vector3.Dot(velocity.normalized, camera.transform.right);
 
             if (screenDirection > 0.45f)
             {
-                return CodexPetAnimationState.RunningRight;
+                return CodexAnimalAnimationState.RunningRight;
             }
 
             if (screenDirection < -0.45f)
             {
-                return CodexPetAnimationState.RunningLeft;
+                return CodexAnimalAnimationState.RunningLeft;
             }
 
-            return CodexPetAnimationState.Running;
+            return CodexAnimalAnimationState.Running;
         }
 
-        private CodexPetAnimationState PickRandomActionState()
+        private CodexAnimalAnimationState PickRandomActionState()
         {
             int roll = Random.Range(0, 100);
 
             if (roll < 16)
             {
-                return CodexPetAnimationState.Jumping;
+                return CodexAnimalAnimationState.Jumping;
             }
 
             if (roll < 31)
             {
-                return CodexPetAnimationState.Waving;
+                return CodexAnimalAnimationState.Waving;
             }
 
             if (roll < 45)
             {
-                return CodexPetAnimationState.Review;
+                return CodexAnimalAnimationState.Review;
             }
 
             if (roll < 57)
             {
-                return CodexPetAnimationState.Waiting;
+                return CodexAnimalAnimationState.Waiting;
             }
 
             if (roll < 82)
@@ -517,7 +447,7 @@ namespace Underwater
                 return GetDirectionalRunState();
             }
 
-            return CodexPetAnimationState.Idle;
+            return CodexAnimalAnimationState.Idle;
         }
 
         private static string BuildFallbackStatusMessage(string phase)

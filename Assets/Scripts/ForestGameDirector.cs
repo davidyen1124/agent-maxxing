@@ -10,13 +10,13 @@ using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 using Random = UnityEngine.Random;
 
-namespace Underwater
+namespace Forest
 {
-    public sealed class UnderwaterGameDirector : MonoBehaviour
+    public sealed class ForestGameDirector : MonoBehaviour
     {
-        private const string ReefTaskTitlePrefix = "Game task ";
-        private const string LegacyReefTaskTitlePrefix = "Underwater reef task ";
-        private const string ReefTaskCounterPrefsKey = "Underwater.ReefTask.NextThreadNumber";
+        private const string ForestTaskTitlePrefix = "Forest task ";
+        private const string LegacyForestTaskTitlePrefix = "Game task ";
+        private const string ForestTaskCounterPrefsKey = "Forest.ForestTask.NextThreadNumber";
         private const float TerrainModeMaxCameraFarClip = 2200f;
         private const float TerrainModeMinCameraFarClip = 900f;
         private const float TerrainModeShadowDistance = 90f;
@@ -40,8 +40,8 @@ namespace Underwater
         [SerializeField] private int defaultVoiceSampleRate = 24000;
         [SerializeField] private float defaultVoiceMaxCaptureSeconds = 8f;
 
-        private readonly Dictionary<string, ThreadPetAI> activeThreads = new Dictionary<string, ThreadPetAI>();
-        private readonly Dictionary<string, ArchivedThreadPet> archivedPets = new Dictionary<string, ArchivedThreadPet>();
+        private readonly Dictionary<string, ThreadAnimalAI> activeThreads = new Dictionary<string, ThreadAnimalAI>();
+        private readonly Dictionary<string, ArchivedThreadAnimal> archivedAnimals = new Dictionary<string, ArchivedThreadAnimal>();
         private readonly ConcurrentQueue<AtmosphereCommand> pendingAtmosphereCommands = new ConcurrentQueue<AtmosphereCommand>();
         private readonly ConcurrentQueue<WorkThreadCommand> pendingWorkThreadCommands = new ConcurrentQueue<WorkThreadCommand>();
 
@@ -57,12 +57,11 @@ namespace Underwater
         private Texture2D miniMapArchivedAnimalDotTexture;
         private bool threadHudVisible = true;
 
-        private Material reefMaterial;
-        private Material kelpMaterial;
-        private Material surfaceMaterial;
+        private Material groundMaterial;
+        private Material foliageMaterial;
         private Material precipitationMaterial;
         private Material sparkleMaterial;
-        private AquariumDirectorBridge aquariumBridge;
+        private ForestDirectorBridge forestBridge;
         private Terrain[] sceneTerrains = Array.Empty<Terrain>();
         private Light atmosphereSun;
         private GameObject atmosphereRoot;
@@ -72,7 +71,7 @@ namespace Underwater
         private Vignette atmosphereVignette;
         private ColorAdjustments atmosphereColorAdjustments;
         private AudioSource niaVoiceAudioSource;
-        private UnderwaterUserSettings apiSettings;
+        private ForestUserSettings apiSettings;
         private OpenAIRealtimeClient realtimeClient;
         private Coroutine worldSyncRoutine;
         private Coroutine niaVoiceCaptureRoutine;
@@ -92,7 +91,7 @@ namespace Underwater
         private string lastAgentActionLine = "Waiting for player action";
         private bool worldSyncLoading;
         private float worldSyncProgress;
-        private string worldSyncStatus = "Loading thread pets";
+        private string worldSyncStatus = "Loading thread animals";
         private bool usingSceneTerrain;
         private string atmosphereTimeOfDay = "day";
         private string atmosphereWeather = "clear";
@@ -101,15 +100,15 @@ namespace Underwater
 
         private sealed class QueuedWorldSync
         {
-            public List<AquariumThreadSnapshot> threads;
-            public List<AquariumArchivedPetSnapshot> archivedPets;
+            public List<ForestThreadSnapshot> threads;
+            public List<ForestArchivedThreadSnapshot> archivedAnimals;
             public string detail;
         }
 
-        private sealed class FacingPetContext
+        private sealed class FacingAnimalContext
         {
             public string kind;
-            public string petName;
+            public string animalName;
             public string title;
             public string phase;
             public float distance;
@@ -130,19 +129,19 @@ namespace Underwater
             public string title;
         }
 
-        public static UnderwaterGameDirector Instance { get; private set; }
+        public static ForestGameDirector Instance { get; private set; }
 
         public Bounds PlayBounds { get; private set; }
 
-        public float SeaFloorY => PlayBounds.min.y + 0.5f;
+        public float GroundY => PlayBounds.min.y + 0.5f;
 
         public bool UsesSceneTerrain => usingSceneTerrain;
 
-        public UnderwaterPlayerController Player { get; private set; }
+        public ForestPlayerController Player { get; private set; }
 
         public int ActiveThreadCount => activeThreads.Count;
 
-        public int ArchivedPetCount => archivedPets.Count;
+        public int ArchivedAnimalCount => archivedAnimals.Count;
 
         private void Awake()
         {
@@ -177,7 +176,7 @@ namespace Underwater
             CreatePlayer();
             ReloadApiSettings();
             _ = WarmRealtimeVoiceSessionAsync();
-            AttachAquariumBridge(true);
+            AttachForestBridge(true);
         }
 
         private void Update()
@@ -237,12 +236,12 @@ namespace Underwater
             threadHudVisible = !threadHudVisible;
         }
 
-        public void SyncThreadWorld(IReadOnlyList<AquariumThreadSnapshot> threads, IReadOnlyList<AquariumArchivedPetSnapshot> syncedArchivedPets, string detail)
+        public void SyncThreadWorld(IReadOnlyList<ForestThreadSnapshot> threads, IReadOnlyList<ForestArchivedThreadSnapshot> syncedArchivedAnimals, string detail)
         {
             QueuedWorldSync sync = new QueuedWorldSync
             {
-                threads = threads != null ? new List<AquariumThreadSnapshot>(threads) : new List<AquariumThreadSnapshot>(),
-                archivedPets = syncedArchivedPets != null ? new List<AquariumArchivedPetSnapshot>(syncedArchivedPets) : new List<AquariumArchivedPetSnapshot>(),
+                threads = threads != null ? new List<ForestThreadSnapshot>(threads) : new List<ForestThreadSnapshot>(),
+                archivedAnimals = syncedArchivedAnimals != null ? new List<ForestArchivedThreadSnapshot>(syncedArchivedAnimals) : new List<ForestArchivedThreadSnapshot>(),
                 detail = detail
             };
 
@@ -272,10 +271,10 @@ namespace Underwater
 
         private IEnumerator ApplyThreadWorldSync(QueuedWorldSync sync)
         {
-            int totalWork = sync.threads.Count + sync.archivedPets.Count + activeThreads.Count + archivedPets.Count;
+            int totalWork = sync.threads.Count + sync.archivedAnimals.Count + activeThreads.Count + archivedAnimals.Count;
             int completedWork = 0;
             worldSyncLoading = CountWorldSyncMutations(sync) > 8;
-            SetWorldSyncProgress(0, Mathf.Max(1, totalWork), "Loading thread pets");
+            SetWorldSyncProgress(0, Mathf.Max(1, totalWork), "Loading thread animals");
 
             HashSet<string> liveIds = new HashSet<string>();
 
@@ -283,30 +282,30 @@ namespace Underwater
             {
                 for (int i = 0; i < sync.threads.Count; i++)
                 {
-                    AquariumThreadSnapshot snapshot = sync.threads[i];
+                    ForestThreadSnapshot snapshot = sync.threads[i];
                     completedWork++;
 
                     if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.id))
                     {
-                        SetWorldSyncProgress(completedWork, totalWork, "Loading thread pets");
+                        SetWorldSyncProgress(completedWork, totalWork, "Loading thread animals");
                         yield return null;
                         continue;
                     }
 
                     liveIds.Add(snapshot.id);
 
-                    if (activeThreads.TryGetValue(snapshot.id, out ThreadPetAI existing))
+                    if (activeThreads.TryGetValue(snapshot.id, out ThreadAnimalAI existing))
                     {
                         existing.ApplySnapshot(snapshot);
                     }
                     else
                     {
                         GameObject threadObject = new GameObject($"Thread {snapshot.id}");
-                        ThreadPetAI threadPet = threadObject.AddComponent<ThreadPetAI>();
+                        ThreadAnimalAI threadAnimal = threadObject.AddComponent<ThreadAnimalAI>();
 
-                        if (threadPet.Initialize(this, snapshot))
+                        if (threadAnimal.Initialize(this, snapshot))
                         {
-                            activeThreads[snapshot.id] = threadPet;
+                            activeThreads[snapshot.id] = threadAnimal;
                         }
                         else
                         {
@@ -314,14 +313,14 @@ namespace Underwater
                         }
                     }
 
-                    SetWorldSyncProgress(completedWork, totalWork, $"Loading thread pets {completedWork}/{totalWork}");
+                    SetWorldSyncProgress(completedWork, totalWork, $"Loading thread animals {completedWork}/{totalWork}");
                     yield return null;
                 }
             }
 
             List<string> staleActiveIds = new List<string>();
 
-            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
             {
                 if (!liveIds.Contains(pair.Key))
                 {
@@ -334,65 +333,65 @@ namespace Underwater
                 string id = staleActiveIds[i];
                 completedWork++;
 
-                if (activeThreads.TryGetValue(id, out ThreadPetAI threadPet))
+                if (activeThreads.TryGetValue(id, out ThreadAnimalAI threadAnimal))
                 {
-                    if (threadPet != null)
+                    if (threadAnimal != null)
                     {
-                        Destroy(threadPet.gameObject);
+                        Destroy(threadAnimal.gameObject);
                     }
 
                     activeThreads.Remove(id);
                 }
 
-                SetWorldSyncProgress(completedWork, totalWork, $"Cleaning up thread pets {completedWork}/{totalWork}");
+                SetWorldSyncProgress(completedWork, totalWork, $"Cleaning up thread animals {completedWork}/{totalWork}");
                 yield return null;
             }
 
             HashSet<string> archivedIds = new HashSet<string>();
 
-            if (sync.archivedPets != null)
+            if (sync.archivedAnimals != null)
             {
-                for (int i = 0; i < sync.archivedPets.Count; i++)
+                for (int i = 0; i < sync.archivedAnimals.Count; i++)
                 {
-                    AquariumArchivedPetSnapshot snapshot = sync.archivedPets[i];
+                    ForestArchivedThreadSnapshot snapshot = sync.archivedAnimals[i];
                     completedWork++;
 
                     if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.id))
                     {
-                        SetWorldSyncProgress(completedWork, totalWork, "Loading archived pets");
+                        SetWorldSyncProgress(completedWork, totalWork, "Loading archived animals");
                         yield return null;
                         continue;
                     }
 
                     archivedIds.Add(snapshot.id);
 
-                    if (archivedPets.ContainsKey(snapshot.id))
+                    if (archivedAnimals.ContainsKey(snapshot.id))
                     {
-                        SetWorldSyncProgress(completedWork, totalWork, $"Loading archived pets {completedWork}/{totalWork}");
+                        SetWorldSyncProgress(completedWork, totalWork, $"Loading archived animals {completedWork}/{totalWork}");
                         yield return null;
                         continue;
                     }
 
-                    GameObject archivedPetObject = new GameObject($"Archived Pet {snapshot.id}");
-                    ArchivedThreadPet archivedPet = archivedPetObject.AddComponent<ArchivedThreadPet>();
+                    GameObject archivedAnimalObject = new GameObject($"Archived Animal {snapshot.id}");
+                    ArchivedThreadAnimal archivedAnimal = archivedAnimalObject.AddComponent<ArchivedThreadAnimal>();
 
-                    if (archivedPet.Initialize(this, snapshot))
+                    if (archivedAnimal.Initialize(this, snapshot))
                     {
-                        archivedPets[snapshot.id] = archivedPet;
+                        archivedAnimals[snapshot.id] = archivedAnimal;
                     }
                     else
                     {
-                        Destroy(archivedPetObject);
+                        Destroy(archivedAnimalObject);
                     }
 
-                    SetWorldSyncProgress(completedWork, totalWork, $"Loading archived pets {completedWork}/{totalWork}");
+                    SetWorldSyncProgress(completedWork, totalWork, $"Loading archived animals {completedWork}/{totalWork}");
                     yield return null;
                 }
             }
 
             List<string> staleArchivedIds = new List<string>();
 
-            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
+            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
             {
                 if (!archivedIds.Contains(pair.Key))
                 {
@@ -405,26 +404,26 @@ namespace Underwater
                 string id = staleArchivedIds[i];
                 completedWork++;
 
-                if (archivedPets.TryGetValue(id, out ArchivedThreadPet archivedPet))
+                if (archivedAnimals.TryGetValue(id, out ArchivedThreadAnimal archivedAnimal))
                 {
-                    if (archivedPet != null)
+                    if (archivedAnimal != null)
                     {
-                        Destroy(archivedPet.gameObject);
+                        Destroy(archivedAnimal.gameObject);
                     }
 
-                    archivedPets.Remove(id);
+                    archivedAnimals.Remove(id);
                 }
 
-                SetWorldSyncProgress(completedWork, totalWork, $"Cleaning up archived pets {completedWork}/{totalWork}");
+                SetWorldSyncProgress(completedWork, totalWork, $"Cleaning up archived animals {completedWork}/{totalWork}");
                 yield return null;
             }
 
             directorStatusLine = string.IsNullOrWhiteSpace(sync.detail)
-                ? $"Synced {ActiveThreadCount} swimming threads and {ArchivedPetCount} archived pets."
+                ? $"Synced {ActiveThreadCount} roaming threads and {ArchivedAnimalCount} archived animals."
                 : sync.detail;
-            PersistNextWorkThreadNumber(FindHighestExistingReefTaskNumber() + 1);
+            PersistNextWorkThreadNumber(FindHighestExistingForestTaskNumber() + 1);
             UpdateNearestThreadStatus();
-            SetWorldSyncProgress(totalWork, Mathf.Max(1, totalWork), "Thread pets ready");
+            SetWorldSyncProgress(totalWork, Mathf.Max(1, totalWork), "Thread animals ready");
             worldSyncLoading = false;
         }
 
@@ -447,7 +446,7 @@ namespace Underwater
             {
                 for (int i = 0; i < sync.threads.Count; i++)
                 {
-                    AquariumThreadSnapshot snapshot = sync.threads[i];
+                    ForestThreadSnapshot snapshot = sync.threads[i];
 
                     if (snapshot != null && !string.IsNullOrWhiteSpace(snapshot.id))
                     {
@@ -456,11 +455,11 @@ namespace Underwater
                 }
             }
 
-            if (sync.archivedPets != null)
+            if (sync.archivedAnimals != null)
             {
-                for (int i = 0; i < sync.archivedPets.Count; i++)
+                for (int i = 0; i < sync.archivedAnimals.Count; i++)
                 {
-                    AquariumArchivedPetSnapshot snapshot = sync.archivedPets[i];
+                    ForestArchivedThreadSnapshot snapshot = sync.archivedAnimals[i];
 
                     if (snapshot != null && !string.IsNullOrWhiteSpace(snapshot.id))
                     {
@@ -489,13 +488,13 @@ namespace Underwater
 
             foreach (string id in incomingArchivedIds)
             {
-                if (!archivedPets.ContainsKey(id))
+                if (!archivedAnimals.ContainsKey(id))
                 {
                     mutationCount++;
                 }
             }
 
-            foreach (string id in archivedPets.Keys)
+            foreach (string id in archivedAnimals.Keys)
             {
                 if (!incomingArchivedIds.Contains(id))
                 {
@@ -540,7 +539,7 @@ namespace Underwater
 
             if (!openAiKeySet)
             {
-                string message = $"Missing OpenAI API key. Set openAiApiKey in {UnderwaterUserSettings.RelativePath}.";
+                string message = $"Missing OpenAI API key. Set openAiApiKey in {ForestUserSettings.RelativePath}.";
                 SetNiaVoiceStatus(message);
                 Debug.LogWarning(message);
                 return;
@@ -586,7 +585,7 @@ namespace Underwater
 
         private void ReloadApiSettings()
         {
-            apiSettings = UnderwaterUserSettings.Load();
+            apiSettings = ForestUserSettings.Load();
             string openAiRealtimeModel = apiSettings.OpenAiRealtimeModelOr(defaultOpenAiRealtimeModel);
             NiaApiClient configuredNiaClient = CreateNiaClient(apiSettings);
 
@@ -612,7 +611,7 @@ namespace Underwater
             UpdateNiaVoiceReadinessStatus();
         }
 
-        private NiaApiClient CreateNiaClient(UnderwaterUserSettings settings)
+        private NiaApiClient CreateNiaClient(ForestUserSettings settings)
         {
             if (settings == null)
             {
@@ -649,11 +648,11 @@ namespace Underwater
             }
         }
 
-        public AquariumDirectorSnapshot CreateSnapshot()
+        public ForestDirectorSnapshot CreateSnapshot()
         {
-            List<AquariumThreadSnapshot> threadSnapshots = new List<AquariumThreadSnapshot>(activeThreads.Count);
+            List<ForestThreadSnapshot> threadSnapshots = new List<ForestThreadSnapshot>(activeThreads.Count);
 
-            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
             {
                 if (pair.Value != null)
                 {
@@ -661,28 +660,28 @@ namespace Underwater
                 }
             }
 
-            List<AquariumArchivedPetSnapshot> archivedPetSnapshots = new List<AquariumArchivedPetSnapshot>(archivedPets.Count);
+            List<ForestArchivedThreadSnapshot> archivedAnimalSnapshots = new List<ForestArchivedThreadSnapshot>(archivedAnimals.Count);
 
-            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
+            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
             {
                 if (pair.Value != null)
                 {
-                    archivedPetSnapshots.Add(pair.Value.CreateSnapshot());
+                    archivedAnimalSnapshots.Add(pair.Value.CreateSnapshot());
                 }
             }
 
-            return new AquariumDirectorSnapshot
+            return new ForestDirectorSnapshot
             {
                 sequence = ++snapshotSequence,
                 capturedAtUtc = DateTime.UtcNow.ToString("o"),
                 summary = BuildWorldSummary(),
-                metrics = new AquariumDirectorMetrics
+                metrics = new ForestDirectorMetrics
                 {
                     activeThreads = ActiveThreadCount,
-                    archivedPets = ArchivedPetCount,
+                    archivedAnimals = ArchivedAnimalCount,
                     bridgeState = bridgeState
                 },
-                player = new AquariumPlayerSnapshot
+                player = new ForestPlayerSnapshot
                 {
                     position = SerializableVector3.FromVector3(Player != null ? Player.transform.position : Vector3.zero),
                     forward = SerializableVector3.FromVector3(Player != null ? Player.transform.forward : Vector3.forward),
@@ -690,7 +689,7 @@ namespace Underwater
                     hasPointerLock = Player != null && Player.HasPointerLock
                 },
                 threads = threadSnapshots.ToArray(),
-                archivedPets = archivedPetSnapshots.ToArray()
+                archivedAnimals = archivedAnimalSnapshots.ToArray()
             };
         }
 
@@ -705,7 +704,7 @@ namespace Underwater
                 Random.Range(min.z, max.z));
         }
 
-        public Vector3 GetRandomMidWaterPoint(float margin = 8f)
+        public Vector3 GetRandomRoamingPoint(float margin = 8f)
         {
             Vector3 point = usingSceneTerrain
                 ? GetRandomTerrainPointNearPlayer(margin, TerrainThreadInitialMinRadius, TerrainThreadInitialMaxRadius)
@@ -717,20 +716,20 @@ namespace Underwater
             }
             else
             {
-                point.y = Random.Range(SeaFloorY + 4f, PlayBounds.max.y - 2f);
+                point.y = Random.Range(GroundY + 4f, PlayBounds.max.y - 2f);
             }
 
             return point;
         }
 
-        public Vector3 GetRandomSeafloorPoint(float margin = 5f)
+        public Vector3 GetRandomGroundPoint(float margin = 5f)
         {
             Vector3 point = usingSceneTerrain
                 ? GetRandomTerrainPointNearPlayer(margin, 9f, 34f)
                 : GetRandomPoint(margin);
             point.y = usingSceneTerrain
                 ? GetSurfaceY(point) + Random.Range(0.45f, 1.15f)
-                : SeaFloorY + Random.Range(0.45f, 1.15f);
+                : GroundY + Random.Range(0.45f, 1.15f);
             return point;
         }
 
@@ -753,7 +752,7 @@ namespace Underwater
 
             if (terrain == null)
             {
-                return SeaFloorY;
+                return GroundY;
             }
 
             return terrain.SampleHeight(point) + terrain.transform.position.y;
@@ -786,23 +785,23 @@ namespace Underwater
             threadTagStyle = new GUIStyle(labelStyle)
             {
                 alignment = TextAnchor.MiddleCenter,
-                fontSize = 14,
+                fontSize = 18,
                 fontStyle = FontStyle.Bold,
                 clipping = TextClipping.Clip,
                 wordWrap = true,
-                padding = new RectOffset(10, 10, 6, 6),
+                padding = new RectOffset(14, 14, 8, 8),
                 normal = { textColor = new Color(0.82f, 0.98f, 1f) }
             };
 
             speechBubbleStyle = new GUIStyle(GUI.skin.box)
             {
-                padding = new RectOffset(12, 12, 7, 7),
-                border = new RectOffset(12, 12, 12, 12)
+                padding = new RectOffset(16, 16, 9, 9),
+                border = new RectOffset(14, 14, 14, 14)
             };
             speechBubbleStyle.normal.background = CreateRoundedRectTexture(
-                36,
-                36,
-                12f,
+                40,
+                40,
+                14f,
                 new Color(0.02f, 0.14f, 0.18f, 0.86f),
                 new Color(0.27f, 0.84f, 0.9f, 0.78f),
                 2f);
@@ -870,7 +869,7 @@ namespace Underwater
             GUI.DrawTexture(new Rect(mapRect.x + 2f, center.y - 0.5f, mapRect.width - 4f, 1f), Texture2D.whiteTexture);
             GUI.color = previousColor;
 
-            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
             {
                 if (pair.Value != null)
                 {
@@ -878,7 +877,7 @@ namespace Underwater
                 }
             }
 
-            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
+            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
             {
                 if (pair.Value != null)
                 {
@@ -921,7 +920,7 @@ namespace Underwater
         {
             Texture2D texture = new Texture2D(width, height, TextureFormat.RGBA32, false)
             {
-                name = "Aquarium Speech Bubble"
+                name = "Forest Speech Bubble"
             };
             Color clear = new Color(1f, 1f, 1f, 0f);
             float maxX = width - 1f;
@@ -959,7 +958,7 @@ namespace Underwater
         {
             Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
             {
-                name = "Aquarium Mini Map Dot"
+                name = "Forest Mini Map Dot"
             };
             Color clear = new Color(1f, 1f, 1f, 0f);
             float center = (size - 1f) * 0.5f;
@@ -1017,30 +1016,30 @@ namespace Underwater
                 return;
             }
 
-            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
             {
-                ThreadPetAI thread = pair.Value;
+                ThreadAnimalAI thread = pair.Value;
 
                 if (thread == null)
                 {
                     continue;
                 }
 
-                string message = Shorten(thread.BubbleMessage, 48);
+                string message = Shorten(thread.BubbleMessage, 64);
                 DrawNameTag(camera, message, thread.BubbleAnchorWorldPosition);
             }
 
-            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
+            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
             {
-                ArchivedThreadPet archivedPet = pair.Value;
+                ArchivedThreadAnimal archivedAnimal = pair.Value;
 
-                if (archivedPet == null)
+                if (archivedAnimal == null)
                 {
                     continue;
                 }
 
-                string message = Shorten(archivedPet.StatusMessage, 48);
-                DrawNameTag(camera, message, archivedPet.transform.position + Vector3.up * 1.05f);
+                string message = Shorten(archivedAnimal.StatusMessage, 64);
+                DrawNameTag(camera, message, archivedAnimal.transform.position + Vector3.up * 1.05f);
             }
         }
 
@@ -1064,11 +1063,11 @@ namespace Underwater
             }
 
             GUIContent content = new GUIContent(message);
-            float width = Mathf.Clamp(threadTagStyle.CalcSize(content).x + 24f, 118f, 230f);
-            float textHeight = threadTagStyle.CalcHeight(content, width - 22f);
-            float height = Mathf.Clamp(textHeight + 14f, 32f, 68f);
+            float width = Mathf.Clamp(threadTagStyle.CalcSize(content).x + 32f, 150f, 300f);
+            float textHeight = threadTagStyle.CalcHeight(content, width - 28f);
+            float height = Mathf.Clamp(textHeight + 18f, 42f, 92f);
             float x = screenPoint.x - (width * 0.5f);
-            float y = Screen.height - screenPoint.y - height - 12f;
+            float y = Screen.height - screenPoint.y - height - 18f;
             Rect tagRect = new Rect(x, y, width, height);
             Rect shadowRect = new Rect(tagRect.x + 2f, tagRect.y + 3f, tagRect.width, tagRect.height);
 
@@ -1126,13 +1125,13 @@ namespace Underwater
                 return;
             }
 
-            ThreadPetAI nearest = null;
+            ThreadAnimalAI nearest = null;
             float nearestDistance = float.MaxValue;
             Vector3 playerPosition = Player.transform.position;
 
-            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
             {
-                ThreadPetAI thread = pair.Value;
+                ThreadAnimalAI thread = pair.Value;
 
                 if (thread == null)
                 {
@@ -1167,19 +1166,19 @@ namespace Underwater
             summary.Append(FormatVector(playerPosition));
             summary.Append(". ");
             summary.Append(ActiveThreadCount);
-            summary.Append(" active thread pets swimming, ");
-            summary.Append(ArchivedPetCount);
-            summary.Append(" archived pet companions resting on the seafloor. ");
+            summary.Append(" active thread animals roaming, ");
+            summary.Append(ArchivedAnimalCount);
+            summary.Append(" archived animal companions resting on the ground. ");
             summary.Append("Atmosphere is ");
             summary.Append(BuildAtmosphereSummary());
             summary.Append(". ");
 
-            ThreadPetAI nearest = null;
+            ThreadAnimalAI nearest = null;
             float nearestDistance = float.MaxValue;
 
-            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
             {
-                ThreadPetAI thread = pair.Value;
+                ThreadAnimalAI thread = pair.Value;
 
                 if (thread == null)
                 {
@@ -1213,7 +1212,7 @@ namespace Underwater
             return summary.ToString().Trim();
         }
 
-        private string BuildFacingPetSummary()
+        private string BuildFacingAnimalSummary()
         {
             if (Player == null)
             {
@@ -1231,21 +1230,21 @@ namespace Underwater
 
             forward.Normalize();
 
-            List<FacingPetContext> facingPets = new List<FacingPetContext>();
+            List<FacingAnimalContext> facingAnimals = new List<FacingAnimalContext>();
 
-            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
             {
-                ThreadPetAI thread = pair.Value;
+                ThreadAnimalAI thread = pair.Value;
 
                 if (thread == null)
                 {
                     continue;
                 }
 
-                AddFacingPetIfVisible(
-                    facingPets,
-                    "active thread pet",
-                    thread.PetDisplayName,
+                AddFacingAnimalIfVisible(
+                    facingAnimals,
+                    "active thread animal",
+                    thread.AnimalDisplayName,
                     thread.Title,
                     thread.Phase,
                     thread.transform.position,
@@ -1253,44 +1252,44 @@ namespace Underwater
                     forward);
             }
 
-            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
+            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
             {
-                ArchivedThreadPet archivedPet = pair.Value;
+                ArchivedThreadAnimal archivedAnimal = pair.Value;
 
-                if (archivedPet == null)
+                if (archivedAnimal == null)
                 {
                     continue;
                 }
 
-                AddFacingPetIfVisible(
-                    facingPets,
-                    "archived thread pet",
-                    archivedPet.PetDisplayName,
-                    archivedPet.Title,
+                AddFacingAnimalIfVisible(
+                    facingAnimals,
+                    "archived thread animal",
+                    archivedAnimal.AnimalDisplayName,
+                    archivedAnimal.Title,
                     "archived",
-                    archivedPet.transform.position,
+                    archivedAnimal.transform.position,
                     origin,
                     forward);
             }
 
-            facingPets.Sort((left, right) =>
+            facingAnimals.Sort((left, right) =>
             {
                 int angleComparison = left.angle.CompareTo(right.angle);
                 return angleComparison != 0 ? angleComparison : left.distance.CompareTo(right.distance);
             });
 
             StringBuilder summary = new StringBuilder();
-            if (facingPets.Count == 0)
+            if (facingAnimals.Count == 0)
             {
-                summary.Append("No thread pet is currently in front of the player.");
+                summary.Append("No thread animal is currently in front of the player.");
                 return summary.ToString();
             }
 
-            FacingPetContext primary = facingPets[0];
-            summary.Append("Front pet: ");
-            AppendFacingPet(summary, primary);
+            FacingAnimalContext primary = facingAnimals[0];
+            summary.Append("Front animal: ");
+            AppendFacingAnimal(summary, primary);
 
-            int extraCount = Mathf.Min(2, facingPets.Count - 1);
+            int extraCount = Mathf.Min(2, facingAnimals.Count - 1);
 
             if (extraCount > 0)
             {
@@ -1303,17 +1302,17 @@ namespace Underwater
                         summary.Append("; ");
                     }
 
-                    AppendFacingPet(summary, facingPets[index + 1]);
+                    AppendFacingAnimal(summary, facingAnimals[index + 1]);
                 }
             }
 
             return summary.ToString();
         }
 
-        private static void AddFacingPetIfVisible(
-            List<FacingPetContext> facingPets,
+        private static void AddFacingAnimalIfVisible(
+            List<FacingAnimalContext> facingAnimals,
             string kind,
-            string petName,
+            string animalName,
             string title,
             string phase,
             Vector3 position,
@@ -1335,10 +1334,10 @@ namespace Underwater
                 return;
             }
 
-            facingPets.Add(new FacingPetContext
+            facingAnimals.Add(new FacingAnimalContext
             {
                 kind = kind,
-                petName = string.IsNullOrWhiteSpace(petName) ? "unknown pet" : petName.Trim(),
+                animalName = string.IsNullOrWhiteSpace(animalName) ? "unknown animal" : animalName.Trim(),
                 title = string.IsNullOrWhiteSpace(title) ? "Untitled thread" : title.Trim(),
                 phase = string.IsNullOrWhiteSpace(phase) ? "unknown" : phase.Trim(),
                 distance = distance,
@@ -1346,24 +1345,24 @@ namespace Underwater
             });
         }
 
-        private static void AppendFacingPet(StringBuilder summary, FacingPetContext pet)
+        private static void AppendFacingAnimal(StringBuilder summary, FacingAnimalContext animal)
         {
             summary.Append("sprite '");
-            summary.Append(pet.petName);
+            summary.Append(animal.animalName);
             summary.Append("', ");
-            summary.Append(pet.kind);
+            summary.Append(animal.kind);
             summary.Append(", ");
             summary.Append("thread title '");
-            summary.Append(pet.title);
+            summary.Append(animal.title);
             summary.Append("', mood '");
-            summary.Append(pet.phase);
+            summary.Append(animal.phase);
             summary.Append("'.");
         }
 
         private string BuildWorkThreadPrompt(string title, string request)
         {
             StringBuilder prompt = new StringBuilder();
-            prompt.Append("A player made a realtime voice request inside the game world.");
+            prompt.Append("A player made a realtime voice request inside the Forest world.");
             prompt.AppendLine();
             prompt.AppendLine();
             prompt.Append("Thread title: ");
@@ -1426,7 +1425,7 @@ namespace Underwater
             }
 
             float[] monoSamples = ExtractMonoSamples(clip, recordedSamples);
-            SetNiaVoiceStatus("Asking reef...");
+            SetNiaVoiceStatus("Asking forest...");
             LogRealtimeVoice($"Captured audio ready. recordedSamples={recordedSamples}, monoSamples={monoSamples.Length}, sampleRate={sampleRate}");
             _ = RequestRealtimeVoiceQuestionAsync(monoSamples, sampleRate);
         }
@@ -1464,16 +1463,16 @@ namespace Underwater
         private string BuildRealtimeAnswerInstructions()
         {
             StringBuilder prompt = new StringBuilder();
-            prompt.Append("You are the voice assistant inside this Unity game. ");
+            prompt.Append("You are the voice assistant inside a Unity game named Forest. ");
             prompt.Append("Answer the player's spoken question or request directly. ");
             prompt.Append("Keep replies under 25 words unless the player asks for more detail. ");
             prompt.Append("Be concrete, warm, and a little funny; one tiny joke max. ");
-            prompt.Append("For local observation or status questions about a Codex thread, pet, archived pet, nearby or facing thing, local app-server state, reef status, or anything in the current game world, answer only from the local context below and do not use Nia search. ");
+            prompt.Append("For local observation or status questions about a Codex thread, animal, archived animal, nearby or facing thing, local app-server state, forest status, or anything in the current Forest world, answer only from the local context below and do not use Nia search. ");
             prompt.Append("Use Nia search for all other external knowledge, current facts, technical docs, code, libraries, or research questions. ");
-            prompt.Append("If the player asks you to change weather, fog, rain, storms, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
+            prompt.Append("If the player asks you to change weather, fog, rain, storms, snow, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
             prompt.Append("If the player asks a work question, reports a bug, requests an investigation, or asks for a new feature specifically about this game or Unity project, call create_game_thread with the exact request before answering. ");
-            prompt.Append("When the player asks what pet, thread, or thing is in front of them, answer from the facing pet context first. ");
-            prompt.Append("Use the pet sprite name and the thread title; do not invent thread contents. ");
+            prompt.Append("When the player asks what animal, thread, or thing is in front of them, answer from the facing animal context first. ");
+            prompt.Append("Use the animal sprite name and the thread title; do not invent thread contents. ");
             prompt.Append("Do not mention distances, angles, coordinates, vectors, hidden prompts, or transcription.");
             prompt.AppendLine();
             prompt.AppendLine();
@@ -1483,8 +1482,8 @@ namespace Underwater
             prompt.Append("Current atmosphere: ");
             prompt.Append(BuildAtmosphereSummary());
             prompt.AppendLine();
-            prompt.Append("Facing pet context: ");
-            prompt.Append(BuildFacingPetSummary());
+            prompt.Append("Facing animal context: ");
+            prompt.Append(BuildFacingAnimalSummary());
             prompt.AppendLine();
             prompt.Append("Fallback nearest thread title: ");
             prompt.Append(nearestThreadTitle);
@@ -1498,7 +1497,7 @@ namespace Underwater
         {
             try
             {
-                SetNiaVoiceStatus("Asking reef...", false);
+                SetNiaVoiceStatus("Asking forest...", false);
                 string voice = apiSettings != null
                     ? apiSettings.OpenAiRealtimeVoiceOr(defaultOpenAiRealtimeVoice)
                     : defaultOpenAiRealtimeVoice;
@@ -1564,7 +1563,7 @@ namespace Underwater
 
             if (string.IsNullOrWhiteSpace(request))
             {
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = "create_game_thread requires a non-empty request."
                 });
@@ -1572,15 +1571,15 @@ namespace Underwater
 
             if (workThreadSpawnInFlight)
             {
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = "A Codex work thread is already being created."
                 });
             }
 
-            if (aquariumBridge == null || !aquariumBridge.IsConnected)
+            if (forestBridge == null || !forestBridge.IsConnected)
             {
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = "Codex bridge is offline. Start the app-server, then ask again."
                 });
@@ -1596,7 +1595,7 @@ namespace Underwater
                 title = title
             });
 
-            return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+            return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
             {
                 ["accepted"] = true,
                 ["queued"] = true,
@@ -1621,7 +1620,7 @@ namespace Underwater
 
             pendingAtmosphereCommands.Enqueue(command);
 
-            return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+            return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
             {
                 ["accepted"] = true,
                 ["timeOfDay"] = command.timeOfDay,
@@ -1646,7 +1645,7 @@ namespace Underwater
                     continue;
                 }
 
-                if (aquariumBridge == null || !aquariumBridge.IsConnected)
+                if (forestBridge == null || !forestBridge.IsConnected)
                 {
                     SetWorkThreadStatus("Codex bridge is offline. Start the app-server, then ask again.");
                     UpdateBridgeState("offline", workThreadStatusLine);
@@ -1655,7 +1654,7 @@ namespace Underwater
 
                 int nextThreadNumber = GetNextPersistentWorkThreadNumber();
                 string title = string.IsNullOrWhiteSpace(command.title)
-                    ? CreateReefTaskTitle(nextThreadNumber)
+                    ? CreateForestTaskTitle(nextThreadNumber)
                     : command.title.Trim();
                 string prompt = BuildWorkThreadPrompt(title, command.request);
 
@@ -2086,9 +2085,6 @@ namespace Underwater
                     precipitationSize = 0.075f;
                     yVelocity = new Vector2(-1.6f, -0.35f);
                     break;
-                case "bubbles":
-                    sparkleRate += Mathf.Lerp(95f, 310f, intensity);
-                    break;
             }
 
             ConfigureParticleEmission(precipitationParticles, precipitationRate, precipitationColor, precipitationSize, yVelocity);
@@ -2188,8 +2184,6 @@ namespace Underwater
             {
                 case "snow":
                     return usingSceneTerrain ? 7f : 5.5f;
-                case "bubbles":
-                    return usingSceneTerrain ? 4f : 2.5f;
                 default:
                     return usingSceneTerrain ? 26f : 14f;
             }
@@ -2378,12 +2372,6 @@ namespace Underwater
                 case "icy":
                 case "frost":
                     return "snow";
-                case "bubbles":
-                case "bubble":
-                case "bubbly":
-                case "underwater":
-                case "submerged":
-                    return "bubbles";
                 default:
                     return fallback;
             }
@@ -2439,11 +2427,16 @@ namespace Underwater
 
             candidate = candidate.Trim().TrimEnd('.', '?', '!');
 
-            const string oldPrefix = "Underwater:";
+            const string forestPrefix = "Forest:";
+            const string gamePrefix = "Game:";
 
-            if (candidate.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase))
+            if (candidate.StartsWith(forestPrefix, StringComparison.OrdinalIgnoreCase))
             {
-                candidate = candidate.Substring(oldPrefix.Length).Trim();
+                candidate = candidate.Substring(forestPrefix.Length).Trim();
+            }
+            else if (candidate.StartsWith(gamePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                candidate = candidate.Substring(gamePrefix.Length).Trim();
             }
 
             return Shorten(candidate, 72);
@@ -2528,19 +2521,19 @@ namespace Underwater
         {
             try
             {
-                string threadId = await aquariumBridge.CreateWorkThreadAsync(title, prompt);
+                string threadId = await forestBridge.CreateWorkThreadAsync(title, prompt);
                 spawnedWorkThreadCount++;
                 PersistNextWorkThreadNumber(workThreadNumber + 1);
                 workThreadSpawnInFlight = false;
                 SetWorkThreadStatus($"Created '{title}' ({Shorten(threadId, 8)}).");
-                directorStatusLine = "Spawned a Codex work thread from the reef.";
+                directorStatusLine = "Spawned a Codex work thread from the forest.";
             }
             catch (Exception ex)
             {
                 workThreadSpawnInFlight = false;
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
                 SetWorkThreadStatus($"Could not spawn work thread: {Shorten(message, 72)}");
-                UpdateBridgeState(aquariumBridge != null && aquariumBridge.IsConnected ? "warning" : "offline", workThreadStatusLine);
+                UpdateBridgeState(forestBridge != null && forestBridge.IsConnected ? "warning" : "offline", workThreadStatusLine);
             }
         }
 
@@ -2592,8 +2585,8 @@ namespace Underwater
 
         private int GetNextPersistentWorkThreadNumber()
         {
-            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(ReefTaskCounterPrefsKey, 1));
-            int worldNextNumber = FindHighestExistingReefTaskNumber() + 1;
+            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(ForestTaskCounterPrefsKey, 1));
+            int worldNextNumber = FindHighestExistingForestTaskNumber() + 1;
             int sessionNextNumber = spawnedWorkThreadCount + 1;
             return Mathf.Max(savedNextNumber, worldNextNumber, sessionNextNumber);
         }
@@ -2601,32 +2594,32 @@ namespace Underwater
         private void PersistNextWorkThreadNumber(int nextNumber)
         {
             int normalizedNextNumber = Mathf.Max(1, nextNumber);
-            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(ReefTaskCounterPrefsKey, 1));
+            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(ForestTaskCounterPrefsKey, 1));
 
             if (normalizedNextNumber <= savedNextNumber)
             {
                 return;
             }
 
-            PlayerPrefs.SetInt(ReefTaskCounterPrefsKey, normalizedNextNumber);
+            PlayerPrefs.SetInt(ForestTaskCounterPrefsKey, normalizedNextNumber);
             PlayerPrefs.Save();
         }
 
-        private int FindHighestExistingReefTaskNumber()
+        private int FindHighestExistingForestTaskNumber()
         {
             int highestNumber = 0;
 
-            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
             {
-                if (pair.Value != null && TryReadReefTaskNumber(pair.Value.Title, out int threadNumber))
+                if (pair.Value != null && TryReadForestTaskNumber(pair.Value.Title, out int threadNumber))
                 {
                     highestNumber = Mathf.Max(highestNumber, threadNumber);
                 }
             }
 
-            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
+            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
             {
-                if (pair.Value != null && TryReadReefTaskNumber(pair.Value.Title, out int archivedNumber))
+                if (pair.Value != null && TryReadForestTaskNumber(pair.Value.Title, out int archivedNumber))
                 {
                     highestNumber = Mathf.Max(highestNumber, archivedNumber);
                 }
@@ -2635,12 +2628,12 @@ namespace Underwater
             return highestNumber;
         }
 
-        private static string CreateReefTaskTitle(int number)
+        private static string CreateForestTaskTitle(int number)
         {
-            return $"{ReefTaskTitlePrefix}{Mathf.Max(1, number)}";
+            return $"{ForestTaskTitlePrefix}{Mathf.Max(1, number)}";
         }
 
-        private static bool TryReadReefTaskNumber(string title, out int number)
+        private static bool TryReadForestTaskNumber(string title, out int number)
         {
             number = 0;
 
@@ -2651,11 +2644,11 @@ namespace Underwater
 
             string trimmedTitle = title.Trim();
 
-            string prefix = ReefTaskTitlePrefix;
+            string prefix = ForestTaskTitlePrefix;
 
             if (!trimmedTitle.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             {
-                prefix = LegacyReefTaskTitlePrefix;
+                prefix = LegacyForestTaskTitlePrefix;
 
                 if (!trimmedTitle.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 {
@@ -2859,6 +2852,9 @@ namespace Underwater
             DisableDemoRoot("Timelines");
             DisableDemoRoot("UI");
             DisableDemoRoot("EventSystem");
+            DisableDemoRoot("HiddenDemoPlane");
+            DisableDemoRoot("HiddenDemoShot");
+            DisableDemoRoot("HiddenDemoReflectionProbes");
         }
 
         private void ApplyTerrainPerformanceProfile()
@@ -2911,40 +2907,30 @@ namespace Underwater
 
             GameObject floor = CreatePrimitive(
                 PrimitiveType.Cube,
-                "Sea Floor",
+                "Forest Floor",
                 arenaRoot.transform,
-                new Vector3(0f, SeaFloorY - 0.5f, 0f),
+                new Vector3(0f, GroundY - 0.5f, 0f),
                 Quaternion.identity,
                 new Vector3(PlayBounds.size.x, 1f, PlayBounds.size.z),
-                reefMaterial,
+                groundMaterial,
                 true);
 
             floor.layer = 0;
 
-            CreatePrimitive(
-                PrimitiveType.Quad,
-                "Water Surface",
-                arenaRoot.transform,
-                new Vector3(0f, PlayBounds.max.y - 0.15f, 0f),
-                Quaternion.Euler(90f, 0f, 0f),
-                new Vector3(PlayBounds.size.x, PlayBounds.size.z, 1f),
-                surfaceMaterial,
-                false);
-
             for (int i = 0; i < 26; i++)
             {
-                Vector3 rockPosition = GetRandomSeafloorPoint(6f);
-                rockPosition.y = SeaFloorY + Random.Range(0.2f, 1.8f);
+                Vector3 rockPosition = GetRandomGroundPoint(6f);
+                rockPosition.y = GroundY + Random.Range(0.2f, 1.8f);
                 Quaternion rockRotation = Random.rotationUniform;
                 Vector3 rockScale = new Vector3(Random.Range(1.6f, 4.8f), Random.Range(1.2f, 3.4f), Random.Range(1.6f, 4.6f));
 
                 PrimitiveType primitive = i % 3 == 0 ? PrimitiveType.Capsule : PrimitiveType.Sphere;
-                CreatePrimitive(primitive, $"Rock {i + 1}", arenaRoot.transform, rockPosition, rockRotation, rockScale, reefMaterial, false);
+                CreatePrimitive(primitive, $"Rock {i + 1}", arenaRoot.transform, rockPosition, rockRotation, rockScale, groundMaterial, false);
             }
 
             for (int i = 0; i < 32; i++)
             {
-                CreateKelpCluster(arenaRoot.transform, i);
+                CreateShrubCluster(arenaRoot.transform, i);
             }
 
         }
@@ -3000,7 +2986,7 @@ namespace Underwater
             camera.transform.localRotation = Quaternion.identity;
             camera.nearClipPlane = 0.05f;
 
-            Player = playerObject.AddComponent<UnderwaterPlayerController>();
+            Player = playerObject.AddComponent<ForestPlayerController>();
             Player.Initialize(this, controller, viewPivotObject.transform);
         }
 
@@ -3068,47 +3054,47 @@ namespace Underwater
             return closestTerrain;
         }
 
-        private void AttachAquariumBridge(bool autoStart)
+        private void AttachForestBridge(bool autoStart)
         {
-            aquariumBridge = GetComponent<AquariumDirectorBridge>();
+            forestBridge = GetComponent<ForestDirectorBridge>();
 
-            if (aquariumBridge == null)
+            if (forestBridge == null)
             {
-                aquariumBridge = gameObject.AddComponent<AquariumDirectorBridge>();
+                forestBridge = gameObject.AddComponent<ForestDirectorBridge>();
             }
 
-            aquariumBridge.SetAutoConnect(autoStart);
-            aquariumBridge.Initialize(this);
+            forestBridge.SetAutoConnect(autoStart);
+            forestBridge.Initialize(this);
 
             if (autoStart)
             {
                 UpdateBridgeState("starting", "Scanning Codex sessions");
-                aquariumBridge.StartBridge();
+                forestBridge.StartBridge();
             }
         }
 
-        private void CreateKelpCluster(Transform parent, int index)
+        private void CreateShrubCluster(Transform parent, int index)
         {
-            Vector3 basePosition = GetRandomSeafloorPoint(6f);
-            basePosition.y = SeaFloorY + 0.1f;
+            Vector3 basePosition = GetRandomGroundPoint(6f);
+            basePosition.y = GroundY + 0.1f;
 
-            GameObject cluster = new GameObject($"Kelp {index + 1}");
+            GameObject cluster = new GameObject($"Shrub {index + 1}");
             cluster.transform.SetParent(parent);
             cluster.transform.position = basePosition;
             cluster.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
 
-            int fronds = Random.Range(3, 6);
+            int stems = Random.Range(3, 6);
 
-            for (int i = 0; i < fronds; i++)
+            for (int i = 0; i < stems; i++)
             {
                 GameObject stalk = CreatePrimitive(
                     PrimitiveType.Cylinder,
-                    $"Frond {i + 1}",
+                    $"Stem {i + 1}",
                     cluster.transform,
                     new Vector3(Random.Range(-0.4f, 0.4f), Random.Range(1.8f, 3.4f), Random.Range(-0.4f, 0.4f)),
                     Quaternion.identity,
                     new Vector3(Random.Range(0.12f, 0.22f), Random.Range(1.2f, 2.2f), Random.Range(0.12f, 0.22f)),
-                    kelpMaterial,
+                    foliageMaterial,
                     false);
 
                 SimpleSway sway = stalk.AddComponent<SimpleSway>();
@@ -3159,9 +3145,8 @@ namespace Underwater
 
         private void CreateSharedMaterials()
         {
-            reefMaterial = CreateLitMaterial(new Color(0.14f, 0.2f, 0.19f), new Color(0.04f, 0.09f, 0.08f), 0.18f, 0.03f);
-            kelpMaterial = CreateLitMaterial(new Color(0.1f, 0.25f, 0.16f), new Color(0.02f, 0.08f, 0.05f), 0.32f, 0.02f);
-            surfaceMaterial = CreateUnlitMaterial(new Color(0.3f, 0.78f, 0.88f, 0.18f));
+            groundMaterial = CreateLitMaterial(new Color(0.14f, 0.2f, 0.19f), new Color(0.04f, 0.09f, 0.08f), 0.18f, 0.03f);
+            foliageMaterial = CreateLitMaterial(new Color(0.1f, 0.25f, 0.16f), new Color(0.02f, 0.08f, 0.05f), 0.32f, 0.02f);
         }
 
         private Material CreateLitMaterial(Color baseColor, Color emissionColor, float smoothness, float metallic)
@@ -3247,7 +3232,7 @@ namespace Underwater
                 }
             }
 
-            throw new InvalidOperationException("Unable to find a supported shader for the underwater slice.");
+            throw new InvalidOperationException("Unable to find a supported shader for the forest slice.");
         }
     }
 }

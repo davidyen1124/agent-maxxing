@@ -199,7 +199,7 @@ GameObject:
   - component: {fileID: 8727866893914369665}
   - component: {fileID: 8727866893914369664}
   m_Layer: 0
-  m_Name: Water Shader
+  m_Name: Terrain Lighting
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -232,8 +232,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 50237962b3ea329438780553008c1e4f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  headline: Water Shader
-  textAsset: {fileID: 4900000, guid: 3e520655ce46e4546801e965b75f3d14, type: 3}
+  headline: Terrain Lighting
+  textAsset: {fileID: 0}
   id: 20
 --- !u!1 &8727866893951567450
 GameObject:

@@ -2,12 +2,12 @@ using System;
 using System.IO;
 using UnityEngine;
 
-namespace Underwater
+namespace Forest
 {
     [Serializable]
-    internal sealed class UnderwaterUserSettings
+    internal sealed class ForestUserSettings
     {
-        public const string RelativePath = "UserSettings/UnderwaterApiSettings.json";
+        public const string RelativePath = "UserSettings/ForestApiSettings.json";
 
         public string openAiApiKey;
         public string openAiRealtimeModel;
@@ -23,25 +23,25 @@ namespace Underwater
 
         public static string FilePath => Path.Combine(Directory.GetCurrentDirectory(), RelativePath);
 
-        public static UnderwaterUserSettings Load()
+        public static ForestUserSettings Load()
         {
             string path = FilePath;
 
             if (!File.Exists(path))
             {
-                return new UnderwaterUserSettings();
+                return new ForestUserSettings();
             }
 
             try
             {
                 string json = File.ReadAllText(path);
-                UnderwaterUserSettings settings = JsonUtility.FromJson<UnderwaterUserSettings>(json);
-                return settings ?? new UnderwaterUserSettings();
+                ForestUserSettings settings = JsonUtility.FromJson<ForestUserSettings>(json);
+                return settings ?? new ForestUserSettings();
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"Could not read {RelativePath}: {ex.Message}");
-                return new UnderwaterUserSettings();
+                return new ForestUserSettings();
             }
         }
 

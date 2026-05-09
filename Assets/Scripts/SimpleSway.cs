@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace Underwater
+namespace Forest
 {
     public sealed class SimpleSway : MonoBehaviour
     {
@@ -25,9 +25,9 @@ namespace Underwater
 
         private void Update()
         {
-            float wave = Mathf.Sin((Time.time * Frequency) + Phase);
-            transform.localRotation = initialRotation * Quaternion.AngleAxis(wave * Amplitude, Axis);
-            transform.localPosition = initialPosition + Vector3.up * wave * VerticalBob;
+            float sway = Mathf.Sin((Time.time * Frequency) + Phase);
+            transform.localRotation = initialRotation * Quaternion.AngleAxis(sway * Amplitude, Axis);
+            transform.localPosition = initialPosition + Vector3.up * sway * VerticalBob;
         }
     }
 }

@@ -6,27 +6,27 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
 
-namespace Underwater.Tests
+namespace Forest.Tests
 {
-    public sealed class UnderwaterBootstrapPlayModeTests
+    public sealed class ForestBootstrapPlayModeTests
     {
         [UnityTest]
-        public IEnumerator TerrainDemoSceneBootstrapsUnderwaterSlice()
+        public IEnumerator TerrainDemoSceneBootstrapsForestGame()
         {
             SceneManager.LoadScene("TerrainDemoScene");
             yield return null;
             yield return null;
 
-            UnderwaterGameDirector director = Object.FindAnyObjectByType<UnderwaterGameDirector>();
+            ForestGameDirector director = Object.FindAnyObjectByType<ForestGameDirector>();
 
-            Assert.That(director, Is.Not.Null, "Runtime bootstrap should create the underwater director.");
+            Assert.That(director, Is.Not.Null, "Runtime bootstrap should create the forest director.");
             Assert.That(director.Player, Is.Not.Null, "Runtime bootstrap should create the player rig.");
-            Assert.That(director.GetComponent<AquariumDirectorBridge>(), Is.Not.Null, "Runtime bootstrap should attach the Codex aquarium bridge.");
+            Assert.That(director.GetComponent<ForestDirectorBridge>(), Is.Not.Null, "Runtime bootstrap should attach the Codex forest bridge.");
             Assert.That(Object.FindAnyObjectByType<Terrain>(), Is.Not.Null, "Expected the forest terrain scene to be present.");
             Assert.That(Camera.main, Is.Not.Null, "Expected a main camera for first-person movement.");
             Assert.That(director.Player.SprintEnergyNormalized, Is.GreaterThan(0.99f), "Player should start with full sprint energy.");
             Assert.That(director.ActiveThreadCount, Is.GreaterThanOrEqualTo(0), "Thread count should be readable on boot.");
-            Assert.That(director.ArchivedPetCount, Is.GreaterThanOrEqualTo(0), "Archived pet count should be readable on boot.");
+            Assert.That(director.ArchivedAnimalCount, Is.GreaterThanOrEqualTo(0), "Archived animal count should be readable on boot.");
             Assert.That(RenderSettings.sun, Is.Not.Null, "Terrain mode should register a realtime directional sun.");
             Assert.That(RenderSettings.sun.enabled, Is.True, "The terrain sun should be enabled at runtime.");
             Assert.That(RenderSettings.sun.type, Is.EqualTo(LightType.Directional), "The terrain sun should render as the URP main light.");
@@ -34,10 +34,10 @@ namespace Underwater.Tests
             Assert.That(RenderSettings.ambientSkyColor.maxColorComponent, Is.GreaterThan(0.35f), "Terrain mode needs enough ambient fill for dense vegetation.");
             Assert.That(RenderSettings.fogDensity, Is.LessThanOrEqualTo(0.001f), "Terrain mode daylight fog should not black out the foreground.");
 
-            FieldInfo timeOfDayField = typeof(UnderwaterGameDirector).GetField("atmosphereTimeOfDay", BindingFlags.NonPublic | BindingFlags.Instance);
-            FieldInfo weatherField = typeof(UnderwaterGameDirector).GetField("atmosphereWeather", BindingFlags.NonPublic | BindingFlags.Instance);
-            FieldInfo intensityField = typeof(UnderwaterGameDirector).GetField("atmosphereIntensity", BindingFlags.NonPublic | BindingFlags.Instance);
-            MethodInfo applyAtmosphereMethod = typeof(UnderwaterGameDirector).GetMethod("ApplyAtmosphereProfile", BindingFlags.NonPublic | BindingFlags.Instance);
+            FieldInfo timeOfDayField = typeof(ForestGameDirector).GetField("atmosphereTimeOfDay", BindingFlags.NonPublic | BindingFlags.Instance);
+            FieldInfo weatherField = typeof(ForestGameDirector).GetField("atmosphereWeather", BindingFlags.NonPublic | BindingFlags.Instance);
+            FieldInfo intensityField = typeof(ForestGameDirector).GetField("atmosphereIntensity", BindingFlags.NonPublic | BindingFlags.Instance);
+            MethodInfo applyAtmosphereMethod = typeof(ForestGameDirector).GetMethod("ApplyAtmosphereProfile", BindingFlags.NonPublic | BindingFlags.Instance);
 
             Assert.That(timeOfDayField, Is.Not.Null);
             Assert.That(weatherField, Is.Not.Null);
@@ -55,14 +55,14 @@ namespace Underwater.Tests
         }
 
         [Test]
-        public void ThreadPetBubbleShowsIdleTitleAndRunningMessage()
+        public void ThreadAnimalBubbleShowsIdleTitleAndRunningMessage()
         {
-            GameObject gameObject = new GameObject("Thread Pet Test");
-            ThreadPetAI pet = gameObject.AddComponent<ThreadPetAI>();
+            GameObject gameObject = new GameObject("Thread Animal Test");
+            ThreadAnimalAI animal = gameObject.AddComponent<ThreadAnimalAI>();
 
             try
             {
-                pet.ApplySnapshot(new AquariumThreadSnapshot
+                animal.ApplySnapshot(new ForestThreadSnapshot
                 {
                     id = "thread-1",
                     title = "Review recent conversations",
@@ -70,9 +70,9 @@ namespace Underwater.Tests
                     phase = "idle"
                 });
 
-                Assert.That(pet.BubbleMessage, Is.EqualTo("Review recent conversations"));
+                Assert.That(animal.BubbleMessage, Is.EqualTo("Review recent conversations"));
 
-                pet.ApplySnapshot(new AquariumThreadSnapshot
+                animal.ApplySnapshot(new ForestThreadSnapshot
                 {
                     id = "thread-1",
                     title = "Review recent conversations",
@@ -80,9 +80,9 @@ namespace Underwater.Tests
                     phase = "working"
                 });
 
-                Assert.That(pet.BubbleMessage, Is.EqualTo("Comparing implementation options"));
+                Assert.That(animal.BubbleMessage, Is.EqualTo("Comparing implementation options"));
 
-                pet.ApplySnapshot(new AquariumThreadSnapshot
+                animal.ApplySnapshot(new ForestThreadSnapshot
                 {
                     id = "thread-1",
                     title = "Review recent conversations",
@@ -90,7 +90,7 @@ namespace Underwater.Tests
                     phase = "working"
                 });
 
-                Assert.That(pet.BubbleMessage, Is.EqualTo("Thinking"));
+                Assert.That(animal.BubbleMessage, Is.EqualTo("Thinking"));
             }
             finally
             {
@@ -99,22 +99,22 @@ namespace Underwater.Tests
         }
 
         [Test]
-        public void ThreadPetRandomActionsNeverChooseFailure()
+        public void ThreadAnimalRandomActionsNeverChooseFailure()
         {
-            GameObject gameObject = new GameObject("Thread Pet Random Action Test");
-            ThreadPetAI pet = gameObject.AddComponent<ThreadPetAI>();
+            GameObject gameObject = new GameObject("Thread Animal Random Action Test");
+            ThreadAnimalAI animal = gameObject.AddComponent<ThreadAnimalAI>();
 
             try
             {
-                MethodInfo method = typeof(ThreadPetAI).GetMethod(
+                MethodInfo method = typeof(ThreadAnimalAI).GetMethod(
                     "PickRandomActionState",
                     BindingFlags.NonPublic | BindingFlags.Instance);
                 Assert.That(method, Is.Not.Null);
 
                 for (int i = 0; i < 200; i++)
                 {
-                    object state = method.Invoke(pet, null);
-                    Assert.That(state, Is.Not.EqualTo(CodexPetAnimationState.Failed));
+                    object state = method.Invoke(animal, null);
+                    Assert.That(state, Is.Not.EqualTo(CodexAnimalAnimationState.Failed));
                 }
             }
             finally
@@ -126,7 +126,7 @@ namespace Underwater.Tests
         [Test]
         public void BridgeReadsReasoningSummaryTextObjects()
         {
-            MethodInfo method = typeof(AquariumDirectorBridge).GetMethod(
+            MethodInfo method = typeof(ForestDirectorBridge).GetMethod(
                 "ReadLatestReasoningOrAgentMessage",
                 BindingFlags.NonPublic | BindingFlags.Static);
             Assert.That(method, Is.Not.Null);
@@ -155,10 +155,10 @@ namespace Underwater.Tests
         [Test]
         public void AtmosphereCommandAliasesCoverCommonTimeAndWeatherPhrases()
         {
-            MethodInfo normalizeTime = typeof(UnderwaterGameDirector).GetMethod(
+            MethodInfo normalizeTime = typeof(ForestGameDirector).GetMethod(
                 "NormalizeTimeOfDayOption",
                 BindingFlags.NonPublic | BindingFlags.Static);
-            MethodInfo normalizeWeather = typeof(UnderwaterGameDirector).GetMethod(
+            MethodInfo normalizeWeather = typeof(ForestGameDirector).GetMethod(
                 "NormalizeWeatherOption",
                 BindingFlags.NonPublic | BindingFlags.Static);
 
@@ -176,7 +176,6 @@ namespace Underwater.Tests
             Assert.That(normalizeWeather.Invoke(null, new object[] { "drizzle", "clear" }), Is.EqualTo("rain"));
             Assert.That(normalizeWeather.Invoke(null, new object[] { "lightning", "clear" }), Is.EqualTo("storm"));
             Assert.That(normalizeWeather.Invoke(null, new object[] { "flurries", "clear" }), Is.EqualTo("snow"));
-            Assert.That(normalizeWeather.Invoke(null, new object[] { "submerged", "clear" }), Is.EqualTo("bubbles"));
             Assert.That(normalizeWeather.Invoke(null, new object[] { "same", "rain" }), Is.EqualTo("rain"));
         }
     }

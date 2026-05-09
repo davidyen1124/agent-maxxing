@@ -1,6 +1,6 @@
-namespace Underwater
+namespace Forest
 {
-    public enum CodexPetAnimationState
+    public enum CodexAnimalAnimationState
     {
         Idle,
         RunningRight,

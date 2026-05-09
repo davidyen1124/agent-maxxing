@@ -1,9 +1,9 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-namespace Underwater
+namespace Forest
 {
-    public sealed class UnderwaterPlayerController : MonoBehaviour
+    public sealed class ForestPlayerController : MonoBehaviour
     {
         private const float MaxSprintEnergy = 100f;
         private const float GroundOffset = 0.08f;
@@ -16,7 +16,7 @@ namespace Underwater
         private const float Gravity = -24f;
         private const float JumpHeight = 1.65f;
 
-        private UnderwaterGameDirector director;
+        private ForestGameDirector director;
         private CharacterController characterController;
         private Transform viewPivot;
 
@@ -31,7 +31,7 @@ namespace Underwater
 
         public bool HasPointerLock => Cursor.lockState == CursorLockMode.Locked;
 
-        public void Initialize(UnderwaterGameDirector owningDirector, CharacterController controller, Transform pivot)
+        public void Initialize(ForestGameDirector owningDirector, CharacterController controller, Transform pivot)
         {
             director = owningDirector;
             characterController = controller;

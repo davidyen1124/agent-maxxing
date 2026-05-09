@@ -1,8 +1,8 @@
 using UnityEngine;
 
-namespace Underwater
+namespace Forest
 {
-    public sealed class ThreadPetAnimalVisual : MonoBehaviour
+    public sealed class ThreadAnimalVisual : MonoBehaviour
     {
         private const string AnimatorMoveParameter = "Vert";
         private const string AnimatorRunParameter = "State";
@@ -39,30 +39,30 @@ namespace Underwater
         private float currentRun;
         private float focusGlow;
         private float bobSeed;
-        private string petId = "unknown-pet";
-        private string petDisplayName = "Unknown animal";
+        private string animalId = "unknown-animal";
+        private string animalDisplayName = "Unknown animal";
 
-        public string PetId => petId;
+        public string AnimalId => animalId;
 
-        public string PetDisplayName => petDisplayName;
+        public string AnimalDisplayName => animalDisplayName;
 
-        public static ThreadPetAnimalVisual Create(Transform parent, string seed, float targetHeight)
+        public static ThreadAnimalVisual Create(Transform parent, string seed, float targetHeight)
         {
             int index = GetStableIndex(seed, AnimalPrefabNames.Length);
             GameObject prefab = LoadAnimalPrefab(index);
 
             if (prefab == null)
             {
-                Debug.LogWarning("[ThreadPetAnimalVisual] No animal prefab could be loaded for thread pet.");
+                Debug.LogWarning("[ThreadAnimalVisual] No animal prefab could be loaded for thread animal.");
                 return null;
             }
 
-            ThreadPetAnimalVisual visual = parent.gameObject.AddComponent<ThreadPetAnimalVisual>();
+            ThreadAnimalVisual visual = parent.gameObject.AddComponent<ThreadAnimalVisual>();
             visual.Initialize(prefab, index, targetHeight);
             return visual;
         }
 
-        public void SetState(CodexPetAnimationState state, Vector3 velocity, bool forceRun, bool focused = false, bool failedFocus = false)
+        public void SetState(CodexAnimalAnimationState state, Vector3 velocity, bool forceRun, bool focused = false, bool failedFocus = false)
         {
             if (animator == null)
             {
@@ -80,7 +80,7 @@ namespace Underwater
 
             if (modelRoot != null)
             {
-                float jumpBob = state == CodexPetAnimationState.Jumping ? Mathf.Abs(Mathf.Sin(Time.time * 9f + bobSeed)) * 0.08f : 0f;
+                float jumpBob = state == CodexAnimalAnimationState.Jumping ? Mathf.Abs(Mathf.Sin(Time.time * 9f + bobSeed)) * 0.08f : 0f;
                 float idleBob = currentMove < 0.05f ? Mathf.Sin(Time.time * 2.1f + bobSeed) * 0.015f : 0f;
                 modelRoot.localPosition = modelBaseLocalPosition + (Vector3.up * (jumpBob + idleBob));
             }
@@ -92,8 +92,8 @@ namespace Underwater
         {
             targetHeight = Mathf.Max(0.2f, requestedHeight);
             bobSeed = Random.Range(0f, 100f);
-            petId = animalIndex >= 0 && animalIndex < AnimalPrefabNames.Length ? AnimalPrefabNames[animalIndex] : prefab.name;
-            petDisplayName = animalIndex >= 0 && animalIndex < AnimalDisplayNames.Length ? AnimalDisplayNames[animalIndex] : prefab.name;
+            animalId = animalIndex >= 0 && animalIndex < AnimalPrefabNames.Length ? AnimalPrefabNames[animalIndex] : prefab.name;
+            animalDisplayName = animalIndex >= 0 && animalIndex < AnimalDisplayNames.Length ? AnimalDisplayNames[animalIndex] : prefab.name;
 
             GameObject instance = Instantiate(prefab, transform);
             instance.name = prefab.name;
@@ -112,7 +112,7 @@ namespace Underwater
 
         private void CreateFocusLight()
         {
-            GameObject lightObject = new GameObject("Thread Pet Focus Glow");
+            GameObject lightObject = new GameObject("Thread Animal Focus Glow");
             lightObject.transform.SetParent(transform);
             lightObject.transform.localPosition = Vector3.up * Mathf.Max(0.35f, targetHeight * 0.58f);
             lightObject.transform.localRotation = Quaternion.identity;
@@ -212,7 +212,7 @@ namespace Underwater
                 return null;
             }
 
-            return Resources.Load<GameObject>($"ThreadPetAnimals/{AnimalPrefabNames[index]}");
+            return Resources.Load<GameObject>($"ThreadAnimals/{AnimalPrefabNames[index]}");
         }
 
         private static int GetStableIndex(string seed, int count)
@@ -220,7 +220,7 @@ namespace Underwater
             unchecked
             {
                 int hash = 23;
-                string safeSeed = string.IsNullOrWhiteSpace(seed) ? "underwater" : seed;
+                string safeSeed = string.IsNullOrWhiteSpace(seed) ? "forest" : seed;
 
                 for (int i = 0; i < safeSeed.Length; i++)
                 {
@@ -231,11 +231,11 @@ namespace Underwater
             }
         }
 
-        private static bool IsRunningState(CodexPetAnimationState state)
+        private static bool IsRunningState(CodexAnimalAnimationState state)
         {
-            return state == CodexPetAnimationState.Running ||
-                state == CodexPetAnimationState.RunningLeft ||
-                state == CodexPetAnimationState.RunningRight;
+            return state == CodexAnimalAnimationState.Running ||
+                state == CodexAnimalAnimationState.RunningLeft ||
+                state == CodexAnimalAnimationState.RunningRight;
         }
     }
 }

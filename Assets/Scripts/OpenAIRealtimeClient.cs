@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
-namespace Underwater
+namespace Forest
 {
     internal sealed class OpenAIRealtimeClient
     {
@@ -93,7 +93,7 @@ namespace Underwater
 
             if (string.IsNullOrWhiteSpace(apiKey))
             {
-                throw new InvalidOperationException($"Set openAiApiKey in {UnderwaterUserSettings.RelativePath} to enable voice questions.");
+                throw new InvalidOperationException($"Set openAiApiKey in {ForestUserSettings.RelativePath} to enable voice questions.");
             }
 
             if (monoSamples == null || monoSamples.Length == 0)
@@ -198,7 +198,7 @@ namespace Underwater
 
             if (string.IsNullOrWhiteSpace(apiKey))
             {
-                throw new InvalidOperationException($"Set openAiApiKey in {UnderwaterUserSettings.RelativePath} to enable voice questions.");
+                throw new InvalidOperationException($"Set openAiApiKey in {ForestUserSettings.RelativePath} to enable voice questions.");
             }
 
             if (monoSamples == null || monoSamples.Length == 0)
@@ -278,7 +278,7 @@ namespace Underwater
 
             if (string.IsNullOrWhiteSpace(apiKey))
             {
-                throw new InvalidOperationException($"Set openAiApiKey in {UnderwaterUserSettings.RelativePath} to enable voice questions.");
+                throw new InvalidOperationException($"Set openAiApiKey in {ForestUserSettings.RelativePath} to enable voice questions.");
             }
 
             if (string.IsNullOrWhiteSpace(text))
@@ -461,16 +461,16 @@ namespace Underwater
 
         private string BuildAnswerSessionInstructions()
         {
-            string instructions = "Answer short push-to-talk voice questions and requests for this Unity game.";
+            string instructions = "Answer short push-to-talk voice questions and requests for the Unity game Forest.";
 
             if (CanUseNiaSearch())
             {
-                instructions += " Route local observation/status questions about Codex threads, pets, archived pets, nearby/facing things, reef state, local app-server state, or the current game world to the provided game context only. Never call nia_search for those local thread or pet questions. For all other external knowledge, current information, technical docs, code, libraries, research, or anything that benefits from search, call nia_search before answering.";
+                instructions += " Route questions about Codex threads, animals, archived animals, nearby/facing things, forest state, local app-server state, or the current Forest world to the provided game context only. Never call nia_search for those local thread or animal questions. For all other external knowledge, current information, technical docs, code, libraries, research, or anything that benefits from search, call nia_search before answering.";
             }
 
             if (CanUseWorldCommands())
             {
-                instructions += " When the player asks to change the world, weather, fog, rain, storm, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, day, dawn, sunset, or night, call set_world_atmosphere before speaking.";
+                instructions += " When the player asks to change the world, weather, fog, rain, storm, snow, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, day, dawn, sunset, or night, call set_world_atmosphere before speaking.";
             }
 
             if (CanUseWorkThreadCommands())
@@ -509,7 +509,7 @@ namespace Underwater
             {
                 ["type"] = "function",
                 ["name"] = "nia_search",
-                ["description"] = "Search Nia for external knowledge only. Do not use for local game/Codex app-server questions about threads, pets, archived pets, nearby/facing objects, reef state, or current game context. Use universal for Nia's pre-indexed repositories, docs, and papers; web for current web information; query for configured Nia workspace sources; deep for multi-step research.",
+                ["description"] = "Search Nia for external knowledge only. Do not use for local Forest/Codex app-server questions about threads, animals, archived animals, nearby/facing objects, forest state, or current game context. Use universal for Nia's pre-indexed repositories, docs, and papers; web for current web information; query for configured Nia workspace sources; deep for multi-step research.",
                 ["parameters"] = new Dictionary<string, object>
                 {
                     ["type"] = "object",
@@ -538,7 +538,7 @@ namespace Underwater
             {
                 ["type"] = "function",
                 ["name"] = "set_world_atmosphere",
-                ["description"] = "Change the visible Unity game world atmosphere. Use this for player requests about weather, rain, storms, fog, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, or time of day.",
+                ["description"] = "Change the visible Forest Unity world atmosphere. Use this for player requests about weather, rain, storms, fog, snow, clouds, drizzle, flurries, blizzards, lightning, lighting, or time of day.",
                 ["parameters"] = new Dictionary<string, object>
                 {
                     ["type"] = "object",
@@ -553,8 +553,8 @@ namespace Underwater
                         ["weather"] = new Dictionary<string, object>
                         {
                             ["type"] = "string",
-                            ["enum"] = new List<object> { "preserve", "clear", "fog", "rain", "storm", "snow", "bubbles" },
-                            ["description"] = "Requested weather. Map sunny/clear sky to clear; cloudy, overcast, haze, or mist to fog; drizzle, showers, downpour, or wet weather to rain; thunder, lightning, tempest, or squall to storm; flurries, blizzard, sleet, hail, icy, or frost to snow; bubble, bubbly, underwater, or submerged to bubbles. Use preserve when the player only asks for time or lighting."
+                            ["enum"] = new List<object> { "preserve", "clear", "fog", "rain", "storm", "snow" },
+                            ["description"] = "Requested weather. Map sunny/clear sky to clear; cloudy, overcast, haze, or mist to fog; drizzle, showers, or downpour to rain; thunder, lightning, tempest, or squall to storm; flurries, blizzard, sleet, hail, icy, or frost to snow. Use preserve when the player only asks for time or lighting."
                         },
                         ["intensity"] = new Dictionary<string, object>
                         {
@@ -811,7 +811,7 @@ namespace Underwater
         {
             if (functionCall == null)
             {
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = "Unsupported realtime tool call."
                 });
@@ -831,7 +831,7 @@ namespace Underwater
             {
                 string toolName = functionCall == null ? "null" : functionCall.Name;
                 LogWarning($"Unsupported realtime tool call requested. name={toolName}");
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = "Unsupported realtime tool call."
                 });
@@ -840,20 +840,20 @@ namespace Underwater
             if (!CanUseNiaSearch())
             {
                 LogWarning("Realtime requested NIA search, but niaApiKey is not configured.");
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
-                    ["error"] = $"Set niaApiKey in {UnderwaterUserSettings.RelativePath} to enable Nia search."
+                    ["error"] = $"Set niaApiKey in {ForestUserSettings.RelativePath} to enable Nia search."
                 });
             }
 
-            Dictionary<string, object> arguments = AquariumDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>;
+            Dictionary<string, object> arguments = ForestDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>;
             string query = ReadString(arguments, "query") ?? ReadString(arguments, "question");
             string mode = ReadString(arguments, "mode");
 
             if (string.IsNullOrWhiteSpace(query))
             {
                 LogWarning("Realtime requested NIA search without a query.");
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = "Nia search requires a non-empty query."
                 });
@@ -870,13 +870,13 @@ namespace Underwater
                     ["answer"] = result.Answer ?? string.Empty,
                     ["sources"] = ToObjectList(result.SourceLabels)
                 };
-                return AquariumDirectorBridge.MiniJson.Serialize(output);
+                return ForestDirectorBridge.MiniJson.Serialize(output);
             }
             catch (Exception ex)
             {
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
                 LogWarning($"NIA search failed. {Shorten(message, 240)}");
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = Shorten(message, 400)
                 });
@@ -887,13 +887,13 @@ namespace Underwater
         {
             if (!CanUseWorkThreadCommands())
             {
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = "The work thread command bridge is unavailable."
                 });
             }
 
-            Dictionary<string, object> arguments = AquariumDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>
+            Dictionary<string, object> arguments = ForestDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>
                 ?? new Dictionary<string, object>();
 
             try
@@ -904,7 +904,7 @@ namespace Underwater
             catch (Exception ex)
             {
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = Shorten(message, 400)
                 });
@@ -915,13 +915,13 @@ namespace Underwater
         {
             if (!CanUseWorldCommands())
             {
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = "The Unity world command bridge is unavailable."
                 });
             }
 
-            Dictionary<string, object> arguments = AquariumDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>
+            Dictionary<string, object> arguments = ForestDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>
                 ?? new Dictionary<string, object>();
 
             try
@@ -932,7 +932,7 @@ namespace Underwater
             catch (Exception ex)
             {
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = Shorten(message, 400)
                 });
@@ -1139,7 +1139,7 @@ namespace Underwater
 
         private static async Task SendJsonAsync(ClientWebSocket socket, Dictionary<string, object> payload, CancellationToken token)
         {
-            string json = AquariumDirectorBridge.MiniJson.Serialize(payload);
+            string json = ForestDirectorBridge.MiniJson.Serialize(payload);
             byte[] bytes = Encoding.UTF8.GetBytes(json);
             await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, token);
         }
@@ -1165,7 +1165,7 @@ namespace Underwater
 
             string json = Encoding.UTF8.GetString(stream.ToArray());
 
-            if (!(AquariumDirectorBridge.MiniJson.Deserialize(json) is Dictionary<string, object> message))
+            if (!(ForestDirectorBridge.MiniJson.Deserialize(json) is Dictionary<string, object> message))
             {
                 throw new InvalidOperationException("OpenAI Realtime returned an unreadable event.");
             }

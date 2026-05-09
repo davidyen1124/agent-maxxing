@@ -1,9 +1,9 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-namespace Underwater
+namespace Forest
 {
-    public static class UnderwaterBootstrap
+    public static class ForestBootstrap
     {
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void RegisterSceneHook()
@@ -25,10 +25,10 @@ namespace Underwater
 
         private static void EnsureDirector()
         {
-            if (Object.FindAnyObjectByType<UnderwaterGameDirector>() == null)
+            if (Object.FindAnyObjectByType<ForestGameDirector>() == null)
             {
-                GameObject directorObject = new GameObject("Underwater Director");
-                directorObject.AddComponent<UnderwaterGameDirector>();
+                GameObject directorObject = new GameObject("Forest Director");
+                directorObject.AddComponent<ForestGameDirector>();
             }
         }
     }

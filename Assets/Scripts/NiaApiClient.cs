@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
 
-namespace Underwater
+namespace Forest
 {
     internal sealed class NiaApiClient
     {
@@ -52,7 +52,7 @@ namespace Underwater
 
             if (string.IsNullOrWhiteSpace(apiKey))
             {
-                throw new InvalidOperationException($"Set niaApiKey in {UnderwaterUserSettings.RelativePath} to enable Nia search.");
+                throw new InvalidOperationException($"Set niaApiKey in {ForestUserSettings.RelativePath} to enable Nia search.");
             }
 
             if (string.IsNullOrWhiteSpace(query))
@@ -62,10 +62,10 @@ namespace Underwater
 
             string searchMode = NormalizeSearchMode(string.IsNullOrWhiteSpace(mode) ? defaultSearchMode : mode);
             Dictionary<string, object> payload = BuildSearchPayload(query.Trim(), searchMode);
-            string body = AquariumDirectorBridge.MiniJson.Serialize(payload);
+            string body = ForestDirectorBridge.MiniJson.Serialize(payload);
             Log($"Search request prepared. mode={searchMode}, query=\"{Shorten(query.Trim(), 120)}\", repositories={repositories.Length}, dataSources={dataSources.Length}, maxTokens={maxTokens}");
             string responseBody = await PostJsonAsync($"{baseUrl}/search", body, apiKey, token);
-            Dictionary<string, object> response = AquariumDirectorBridge.MiniJson.Deserialize(responseBody) as Dictionary<string, object>;
+            Dictionary<string, object> response = ForestDirectorBridge.MiniJson.Deserialize(responseBody) as Dictionary<string, object>;
 
             if (response == null)
             {

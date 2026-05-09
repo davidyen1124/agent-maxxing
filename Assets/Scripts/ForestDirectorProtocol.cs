@@ -1,30 +1,30 @@
 using System;
 using UnityEngine;
 
-namespace Underwater
+namespace Forest
 {
     [Serializable]
-    public sealed class AquariumDirectorSnapshot
+    public sealed class ForestDirectorSnapshot
     {
         public int sequence;
         public string capturedAtUtc;
         public string summary;
-        public AquariumDirectorMetrics metrics;
-        public AquariumPlayerSnapshot player;
-        public AquariumThreadSnapshot[] threads;
-        public AquariumArchivedPetSnapshot[] archivedPets;
+        public ForestDirectorMetrics metrics;
+        public ForestPlayerSnapshot player;
+        public ForestThreadSnapshot[] threads;
+        public ForestArchivedThreadSnapshot[] archivedAnimals;
     }
 
     [Serializable]
-    public sealed class AquariumDirectorMetrics
+    public sealed class ForestDirectorMetrics
     {
         public int activeThreads;
-        public int archivedPets;
+        public int archivedAnimals;
         public string bridgeState;
     }
 
     [Serializable]
-    public sealed class AquariumPlayerSnapshot
+    public sealed class ForestPlayerSnapshot
     {
         public SerializableVector3 position;
         public SerializableVector3 forward;
@@ -33,7 +33,7 @@ namespace Underwater
     }
 
     [Serializable]
-    public sealed class AquariumThreadSnapshot
+    public sealed class ForestThreadSnapshot
     {
         public string id;
         public string title;
@@ -46,7 +46,7 @@ namespace Underwater
     }
 
     [Serializable]
-    public sealed class AquariumArchivedPetSnapshot
+    public sealed class ForestArchivedThreadSnapshot
     {
         public string id;
         public string title;

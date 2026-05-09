@@ -2211,7 +2211,7 @@ MonoBehaviour:
     m_PreExtrapolationMode: 0
     m_PostExtrapolationTime: 0
     m_PreExtrapolationTime: 0
-    m_DisplayName: LakeShot
+    m_DisplayName: ForestShot
   m_Markers:
     m_Objects: []
 --- !u!114 &-5899325570122495784
@@ -4842,7 +4842,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 06397f605c749fe4dbe2df4bbd1ef4a1, type: 3}
-  m_Name: LakeShot
+  m_Name: ForestShot
   m_EditorClassIdentifier: 
   enabled: 1
   take: 1
@@ -4853,7 +4853,7 @@ MonoBehaviour:
       m_Leaf: Recordings
       m_ForceAssetFolder: 0
       m_AbsolutePath: 
-    m_FileName: TerrainSamples_LakeShot_<Frame>
+    m_FileName: TerrainSamples_ForestShot_<Frame>
   outputFormat: 0
   captureAlpha: 0
   m_ImageInputSelector:
@@ -7342,7 +7342,7 @@ MonoBehaviour:
     m_PreExtrapolationMode: 0
     m_PostExtrapolationTime: 0
     m_PreExtrapolationTime: 0
-    m_DisplayName: LakeShot_Start_VCam
+    m_DisplayName: ForestShot_Start_VCam
   - m_Version: 1
     m_Start: 77.29999999999998
     m_ClipIn: 0
@@ -7411,7 +7411,7 @@ MonoBehaviour:
     m_PreExtrapolationMode: 0
     m_PostExtrapolationTime: 0
     m_PreExtrapolationTime: 0
-    m_DisplayName: LakeShot_End_VCam
+    m_DisplayName: ForestShot_End_VCam
   m_Markers:
     m_Objects: []
 --- !u!114 &6054416669363394245
