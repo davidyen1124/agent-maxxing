@@ -23,8 +23,8 @@ namespace Underwater.Tests
             Assert.That(director.Player, Is.Not.Null, "Runtime bootstrap should create the player rig.");
             Assert.That(director.GetComponent<AquariumDirectorBridge>(), Is.Not.Null, "Runtime bootstrap should attach the Codex aquarium bridge.");
             Assert.That(Object.FindAnyObjectByType<Terrain>(), Is.Not.Null, "Expected the forest terrain scene to be present.");
-            Assert.That(Camera.main, Is.Not.Null, "Expected a main camera for first-person swimming.");
-            Assert.That(director.Player.BoostNormalized, Is.GreaterThan(0.99f), "Player should start with full swim boost.");
+            Assert.That(Camera.main, Is.Not.Null, "Expected a main camera for first-person movement.");
+            Assert.That(director.Player.SprintEnergyNormalized, Is.GreaterThan(0.99f), "Player should start with full sprint energy.");
             Assert.That(director.ActiveThreadCount, Is.GreaterThanOrEqualTo(0), "Thread count should be readable on boot.");
             Assert.That(director.ArchivedPetCount, Is.GreaterThanOrEqualTo(0), "Archived pet count should be readable on boot.");
         }

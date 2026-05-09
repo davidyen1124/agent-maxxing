@@ -5,23 +5,33 @@ namespace Underwater
 {
     public sealed class UnderwaterPlayerController : MonoBehaviour
     {
-        private const float MaxBoost = 100f;
+        private const float MaxSprintEnergy = 100f;
+        private const float GroundOffset = 0.08f;
+        private const float GroundedTolerance = 0.14f;
+        private const float WalkSpeed = 4.8f;
+        private const float SprintSpeed = 8.2f;
+        private const float WalkAcceleration = 18f;
+        private const float SprintAcceleration = 24f;
+        private const float GroundFriction = 10f;
+        private const float Gravity = -24f;
+        private const float JumpHeight = 1.65f;
 
         private UnderwaterGameDirector director;
         private CharacterController characterController;
         private Transform viewPivot;
 
         private Vector3 velocity;
+        private float verticalVelocity;
         private float yaw;
         private float pitch;
-        private float boostEnergy = MaxBoost;
-        private float swimCycle;
+        private float sprintEnergy = MaxSprintEnergy;
+        private float stepCycle;
 
-        public float BoostNormalized => boostEnergy / MaxBoost;
+        public float SprintEnergyNormalized => sprintEnergy / MaxSprintEnergy;
 
         public bool HasPointerLock => Cursor.lockState == CursorLockMode.Locked;
 
-        public void Initialize(UnderwaterGameDirector owningDirector, CharacterController controller, Transform pivot, Camera camera)
+        public void Initialize(UnderwaterGameDirector owningDirector, CharacterController controller, Transform pivot)
         {
             director = owningDirector;
             characterController = controller;
@@ -95,64 +105,107 @@ namespace Underwater
         private void HandleMovement()
         {
             Vector2 moveInput = Vector2.zero;
-            float verticalInput = 0f;
-            bool boostHeld = false;
+            bool sprintHeld = false;
+            bool jumpPressed = false;
 
             if (Keyboard.current != null)
             {
                 Keyboard keyboard = Keyboard.current;
                 moveInput.x = (keyboard.dKey.isPressed ? 1f : 0f) - (keyboard.aKey.isPressed ? 1f : 0f);
                 moveInput.y = (keyboard.wKey.isPressed ? 1f : 0f) - (keyboard.sKey.isPressed ? 1f : 0f);
-                verticalInput = (keyboard.spaceKey.isPressed ? 1f : 0f) -
-                    ((keyboard.leftCtrlKey.isPressed || keyboard.cKey.isPressed) ? 1f : 0f);
-                boostHeld = keyboard.leftShiftKey.isPressed;
+                sprintHeld = keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed;
+                jumpPressed = keyboard.spaceKey.wasPressedThisFrame;
             }
 
             if (Gamepad.current != null)
             {
                 moveInput += Gamepad.current.leftStick.ReadValue();
-                verticalInput += (Gamepad.current.rightShoulder.isPressed ? 1f : 0f) - (Gamepad.current.leftShoulder.isPressed ? 1f : 0f);
-                boostHeld |= Gamepad.current.buttonSouth.isPressed;
+                sprintHeld |= Gamepad.current.leftStickButton.isPressed;
+                jumpPressed |= Gamepad.current.buttonSouth.wasPressedThisFrame;
             }
 
+            moveInput = Vector2.ClampMagnitude(moveInput, 1f);
+
             Vector3 desiredDirection =
-                (viewPivot.forward * moveInput.y) +
-                (transform.right * moveInput.x) +
-                (Vector3.up * verticalInput);
+                (transform.forward * moveInput.y) +
+                (transform.right * moveInput.x);
 
             if (desiredDirection.sqrMagnitude > 1f)
             {
                 desiredDirection.Normalize();
             }
 
-            bool boosting = boostHeld && boostEnergy > 0.1f && desiredDirection.sqrMagnitude > 0.05f;
-            float targetSpeed = boosting ? 11.5f : 6.2f;
-            float acceleration = boosting ? 18f : 12f;
+            bool sprinting = sprintHeld && sprintEnergy > 0.1f && desiredDirection.sqrMagnitude > 0.05f;
+            float targetSpeed = sprinting ? SprintSpeed : WalkSpeed;
+            float acceleration = sprinting ? SprintAcceleration : WalkAcceleration;
 
             Vector3 targetVelocity = desiredDirection * targetSpeed;
-            velocity = Vector3.MoveTowards(velocity, targetVelocity, acceleration * Time.deltaTime);
+            Vector3 horizontalVelocity = new Vector3(velocity.x, 0f, velocity.z);
+            horizontalVelocity = Vector3.MoveTowards(horizontalVelocity, targetVelocity, acceleration * Time.deltaTime);
 
             if (desiredDirection.sqrMagnitude < 0.05f)
             {
-                velocity = Vector3.MoveTowards(velocity, Vector3.zero, 5f * Time.deltaTime);
+                horizontalVelocity = Vector3.MoveTowards(horizontalVelocity, Vector3.zero, GroundFriction * Time.deltaTime);
             }
 
-            if (boosting)
+            float groundY = GetGroundY();
+            bool grounded = IsGrounded(groundY);
+
+            if (grounded && verticalVelocity < 0f)
             {
-                boostEnergy = Mathf.Max(0f, boostEnergy - 24f * Time.deltaTime);
+                verticalVelocity = -2f;
+            }
+
+            if (grounded && jumpPressed)
+            {
+                verticalVelocity = Mathf.Sqrt(JumpHeight * -2f * Gravity);
+                grounded = false;
+            }
+
+            verticalVelocity += Gravity * Time.deltaTime;
+            velocity = new Vector3(horizontalVelocity.x, verticalVelocity, horizontalVelocity.z);
+
+            if (sprinting)
+            {
+                sprintEnergy = Mathf.Max(0f, sprintEnergy - 24f * Time.deltaTime);
             }
             else
             {
-                boostEnergy = Mathf.Min(MaxBoost, boostEnergy + 18f * Time.deltaTime);
+                sprintEnergy = Mathf.Min(MaxSprintEnergy, sprintEnergy + 18f * Time.deltaTime);
             }
 
-            swimCycle += velocity.magnitude * Time.deltaTime * 0.45f;
-            float bob = Mathf.Sin(swimCycle * 5.5f) * Mathf.Clamp01(velocity.magnitude / 9f) * 0.08f;
-            Vector3 localPivotPosition = new Vector3(0f, 0.62f + bob, 0f);
+            stepCycle += horizontalVelocity.magnitude * Time.deltaTime * 0.45f;
+            float bob = Mathf.Sin(stepCycle * 7.5f) * Mathf.Clamp01(horizontalVelocity.magnitude / SprintSpeed) * 0.045f;
+            Vector3 localPivotPosition = new Vector3(0f, 0.62f + (grounded ? bob : 0f), 0f);
             viewPivot.localPosition = Vector3.Lerp(viewPivot.localPosition, localPivotPosition, Time.deltaTime * 9f);
 
             characterController.Move(velocity * Time.deltaTime);
-            transform.position = director.ClampPoint(transform.position, 0.8f);
+            KeepInsideWalkableBounds();
+        }
+
+        private float GetGroundY()
+        {
+            return director.GetSurfaceY(transform.position) + GroundOffset;
+        }
+
+        private bool IsGrounded(float groundY)
+        {
+            return characterController.isGrounded ||
+                (verticalVelocity <= 0f && transform.position.y <= groundY + GroundedTolerance);
+        }
+
+        private void KeepInsideWalkableBounds()
+        {
+            Vector3 position = director.ClampPoint(transform.position, 0.8f);
+            float groundY = director.GetSurfaceY(position) + GroundOffset;
+
+            if (position.y < groundY)
+            {
+                position.y = groundY;
+                verticalVelocity = Mathf.Max(verticalVelocity, 0f);
+            }
+
+            transform.position = position;
         }
 
         private void HandleInteraction()
