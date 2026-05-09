@@ -18,6 +18,9 @@ namespace Underwater
 
         private readonly string apiKey;
         private readonly string model;
+        private readonly SemaphoreSlim socketLock = new SemaphoreSlim(1, 1);
+        private ClientWebSocket answerSocket;
+        private string answerSessionVoice;
 
         public OpenAIRealtimeClient(string apiKey, string model)
         {
@@ -26,6 +29,41 @@ namespace Underwater
         }
 
         public bool HasApiKey => !string.IsNullOrWhiteSpace(ReadApiKey());
+
+        public bool Matches(string apiKey, string model)
+        {
+            string normalizedApiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim();
+            string normalizedModel = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
+            return string.Equals(this.apiKey, normalizedApiKey, StringComparison.Ordinal)
+                && string.Equals(this.model, normalizedModel, StringComparison.Ordinal);
+        }
+
+        public async Task WarmUpAnswerSessionAsync(string voice, CancellationToken token)
+        {
+            string apiKey = ReadApiKey();
+
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                return;
+            }
+
+            string safeVoice = string.IsNullOrWhiteSpace(voice) ? DefaultVoice : voice.Trim();
+
+            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
+            CancellationToken requestToken = timeoutCts.Token;
+
+            await socketLock.WaitAsync(requestToken);
+
+            try
+            {
+                await EnsureAnswerSessionAsync(apiKey, safeVoice, requestToken);
+            }
+            finally
+            {
+                socketLock.Release();
+            }
+        }
 
         public async Task<RealtimeAudioResult> AskQuestionAsync(float[] monoSamples, int sampleRate, string instructions, string voice, CancellationToken token)
         {
@@ -57,33 +95,54 @@ namespace Underwater
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(45));
             CancellationToken requestToken = timeoutCts.Token;
 
-            using ClientWebSocket socket = new ClientWebSocket();
-            socket.Options.SetRequestHeader("Authorization", $"Bearer {apiKey}");
+            await socketLock.WaitAsync(requestToken);
 
-            Uri uri = new Uri($"wss://api.openai.com/v1/realtime?model={Uri.EscapeDataString(model)}");
-            await socket.ConnectAsync(uri, requestToken);
+            RealtimeAudioResult response = null;
+            Exception lastException = null;
 
-            await WaitForEventTypeAsync(socket, "session.created", requestToken);
-            await SendJsonAsync(socket, BuildAnswerSessionUpdate(safeInstructions, safeVoice), requestToken);
-            await WaitForEventTypeAsync(socket, "session.updated", requestToken);
-
-            await SendJsonAsync(
-                socket,
-                new Dictionary<string, object>
-                {
-                    ["type"] = "input_audio_buffer.append",
-                    ["audio"] = base64Audio
-                },
-                requestToken);
-
-            await SendJsonAsync(socket, new Dictionary<string, object> { ["type"] = "input_audio_buffer.commit" }, requestToken);
-            await SendJsonAsync(socket, BuildAnswerResponseCreate(safeInstructions), requestToken);
-
-            RealtimeAudioResult response = await ReadAudioResponseAsync(socket, requestToken);
-
-            if (socket.State == WebSocketState.Open)
+            try
             {
-                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "answer complete", CancellationToken.None);
+                for (int attempt = 0; attempt < 2; attempt++)
+                {
+                    try
+                    {
+                        await EnsureAnswerSessionAsync(apiKey, safeVoice, requestToken);
+
+                        await SendJsonAsync(
+                            answerSocket,
+                            new Dictionary<string, object>
+                            {
+                                ["type"] = "input_audio_buffer.append",
+                                ["audio"] = base64Audio
+                            },
+                            requestToken);
+
+                        await SendJsonAsync(answerSocket, new Dictionary<string, object> { ["type"] = "input_audio_buffer.commit" }, requestToken);
+                        await SendJsonAsync(answerSocket, BuildAnswerResponseCreate(safeInstructions), requestToken);
+
+                        response = await ReadAudioResponseAsync(answerSocket, requestToken);
+                        break;
+                    }
+                    catch (Exception ex) when (attempt == 0 && IsRecoverableRealtimeSocketException(ex))
+                    {
+                        lastException = ex;
+                        await CloseAnswerSessionAsync("answer session reconnecting");
+                    }
+                }
+
+                if (response == null)
+                {
+                    throw lastException ?? new InvalidOperationException("OpenAI Realtime returned no response.");
+                }
+            }
+            catch
+            {
+                await CloseAnswerSessionAsync("answer session reset");
+                throw;
+            }
+            finally
+            {
+                socketLock.Release();
             }
 
             if (response.Samples == null || response.Samples.Length == 0)
@@ -92,6 +151,20 @@ namespace Underwater
             }
 
             return response;
+        }
+
+        public async Task CloseAsync()
+        {
+            await socketLock.WaitAsync();
+
+            try
+            {
+                await CloseAnswerSessionAsync("client closing");
+            }
+            finally
+            {
+                socketLock.Release();
+            }
         }
 
         public async Task<string> TranscribeQuestionAsync(float[] monoSamples, int sampleRate, CancellationToken token)
@@ -243,7 +316,58 @@ namespace Underwater
             };
         }
 
-        private Dictionary<string, object> BuildAnswerSessionUpdate(string instructions, string voice)
+        private async Task EnsureAnswerSessionAsync(string apiKey, string voice, CancellationToken token)
+        {
+            if (answerSocket != null
+                && answerSocket.State == WebSocketState.Open
+                && string.Equals(answerSessionVoice, voice, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            await CloseAnswerSessionAsync("answer session replacing");
+
+            answerSocket = new ClientWebSocket();
+            answerSocket.Options.SetRequestHeader("Authorization", $"Bearer {apiKey}");
+
+            Uri uri = new Uri($"wss://api.openai.com/v1/realtime?model={Uri.EscapeDataString(model)}");
+            await answerSocket.ConnectAsync(uri, token);
+
+            await WaitForEventTypeAsync(answerSocket, "session.created", token);
+            await SendJsonAsync(answerSocket, BuildAnswerSessionUpdate(voice), token);
+            await WaitForEventTypeAsync(answerSocket, "session.updated", token);
+
+            answerSessionVoice = voice;
+        }
+
+        private async Task CloseAnswerSessionAsync(string reason)
+        {
+            ClientWebSocket socket = answerSocket;
+            answerSocket = null;
+            answerSessionVoice = null;
+
+            if (socket == null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (socket.State == WebSocketState.Open || socket.State == WebSocketState.CloseReceived)
+                {
+                    await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, reason, CancellationToken.None);
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                socket.Dispose();
+            }
+        }
+
+        private Dictionary<string, object> BuildAnswerSessionUpdate(string voice)
         {
             return new Dictionary<string, object>
             {
@@ -274,7 +398,7 @@ namespace Underwater
                             ["voice"] = voice
                         }
                     },
-                    ["instructions"] = instructions
+                    ["instructions"] = "Answer short push-to-talk voice questions for the Unity game Underwater."
                 }
             };
         }
@@ -452,6 +576,22 @@ namespace Underwater
             }
 
             throw new InvalidOperationException("OpenAI Realtime socket closed before returning audio.");
+        }
+
+        private static bool IsRecoverableRealtimeSocketException(Exception ex)
+        {
+            if (ex is WebSocketException)
+            {
+                return true;
+            }
+
+            if (ex is InvalidOperationException && !string.IsNullOrWhiteSpace(ex.Message))
+            {
+                return ex.Message.IndexOf("socket closed", StringComparison.OrdinalIgnoreCase) >= 0
+                    || ex.Message.IndexOf("closed unexpectedly", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
+            return false;
         }
 
         private static async Task<string> ReadResponseTextAsync(ClientWebSocket socket, CancellationToken token)

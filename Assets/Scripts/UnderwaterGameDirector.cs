@@ -67,6 +67,17 @@ namespace Underwater
             public string detail;
         }
 
+        private sealed class FacingPetContext
+        {
+            public string kind;
+            public string title;
+            public string phase;
+            public string status;
+            public Vector3 position;
+            public float distance;
+            public float angle;
+        }
+
         public static UnderwaterGameDirector Instance { get; private set; }
 
         public Bounds PlayBounds { get; private set; }
@@ -109,6 +120,7 @@ namespace Underwater
 
             CreatePlayer();
             ReloadApiSettings();
+            _ = WarmRealtimeVoiceSessionAsync();
             AttachAquariumBridge(false);
             StartCoroutine(LoadCodexPetsThenAttachBridge());
         }
@@ -123,6 +135,11 @@ namespace Underwater
             if (!string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
             {
                 Microphone.End(niaVoiceDeviceName);
+            }
+
+            if (realtimeClient != null)
+            {
+                _ = realtimeClient.CloseAsync();
             }
 
             if (Instance == this)
@@ -509,7 +526,36 @@ namespace Underwater
             apiSettings = UnderwaterUserSettings.Load();
             string openAiRealtimeModel = apiSettings.OpenAiRealtimeModelOr(defaultOpenAiRealtimeModel);
 
-            realtimeClient = new OpenAIRealtimeClient(apiSettings.openAiApiKey, openAiRealtimeModel);
+            if (realtimeClient == null || !realtimeClient.Matches(apiSettings.openAiApiKey, openAiRealtimeModel))
+            {
+                if (realtimeClient != null)
+                {
+                    _ = realtimeClient.CloseAsync();
+                }
+
+                realtimeClient = new OpenAIRealtimeClient(apiSettings.openAiApiKey, openAiRealtimeModel);
+            }
+        }
+
+        private async Task WarmRealtimeVoiceSessionAsync()
+        {
+            if (realtimeClient == null || !realtimeClient.HasApiKey)
+            {
+                return;
+            }
+
+            try
+            {
+                string voice = apiSettings != null
+                    ? apiSettings.OpenAiRealtimeVoiceOr(defaultOpenAiRealtimeVoice)
+                    : defaultOpenAiRealtimeVoice;
+                await realtimeClient.WarmUpAnswerSessionAsync(voice, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+                Debug.LogWarning($"Realtime voice warm-up unavailable: {Shorten(message, 96)}");
+            }
         }
 
         public AquariumDirectorSnapshot CreateSnapshot()
@@ -958,6 +1004,163 @@ namespace Underwater
             return summary.ToString().Trim();
         }
 
+        private string BuildFacingPetSummary()
+        {
+            if (Player == null)
+            {
+                return "Player facing direction is unavailable.";
+            }
+
+            Camera camera = Camera.main;
+            Vector3 origin = camera != null ? camera.transform.position : Player.transform.position;
+            Vector3 forward = camera != null ? camera.transform.forward : Player.transform.forward;
+
+            if (forward.sqrMagnitude < 0.001f)
+            {
+                forward = Vector3.forward;
+            }
+
+            forward.Normalize();
+
+            List<FacingPetContext> facingPets = new List<FacingPetContext>();
+
+            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
+            {
+                ThreadPetAI thread = pair.Value;
+
+                if (thread == null)
+                {
+                    continue;
+                }
+
+                AddFacingPetIfVisible(
+                    facingPets,
+                    "active thread pet",
+                    thread.Title,
+                    thread.Phase,
+                    thread.StatusMessage,
+                    thread.transform.position,
+                    origin,
+                    forward);
+            }
+
+            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
+            {
+                ArchivedThreadPet archivedPet = pair.Value;
+
+                if (archivedPet == null)
+                {
+                    continue;
+                }
+
+                AddFacingPetIfVisible(
+                    facingPets,
+                    "archived thread pet",
+                    archivedPet.Title,
+                    "archived",
+                    archivedPet.StatusMessage,
+                    archivedPet.transform.position,
+                    origin,
+                    forward);
+            }
+
+            facingPets.Sort((left, right) =>
+            {
+                int angleComparison = left.angle.CompareTo(right.angle);
+                return angleComparison != 0 ? angleComparison : left.distance.CompareTo(right.distance);
+            });
+
+            StringBuilder summary = new StringBuilder();
+            summary.Append("Player camera forward vector: ");
+            summary.Append(FormatVector(forward));
+            summary.Append(". ");
+
+            if (facingPets.Count == 0)
+            {
+                summary.Append("No thread pet is currently in front of the player's view cone.");
+                return summary.ToString();
+            }
+
+            FacingPetContext primary = facingPets[0];
+            summary.Append("Pet most directly in front of the player: ");
+            AppendFacingPet(summary, primary);
+
+            int extraCount = Mathf.Min(2, facingPets.Count - 1);
+
+            if (extraCount > 0)
+            {
+                summary.Append(" Other pets also in front: ");
+
+                for (int index = 0; index < extraCount; index++)
+                {
+                    if (index > 0)
+                    {
+                        summary.Append("; ");
+                    }
+
+                    AppendFacingPet(summary, facingPets[index + 1]);
+                }
+            }
+
+            return summary.ToString();
+        }
+
+        private static void AddFacingPetIfVisible(
+            List<FacingPetContext> facingPets,
+            string kind,
+            string title,
+            string phase,
+            string status,
+            Vector3 position,
+            Vector3 origin,
+            Vector3 forward)
+        {
+            Vector3 offset = position - origin;
+            float distance = offset.magnitude;
+
+            if (distance < 0.05f)
+            {
+                return;
+            }
+
+            float alignment = Vector3.Dot(forward, offset / distance);
+
+            if (alignment < 0.5f)
+            {
+                return;
+            }
+
+            facingPets.Add(new FacingPetContext
+            {
+                kind = kind,
+                title = string.IsNullOrWhiteSpace(title) ? "Untitled thread" : title.Trim(),
+                phase = string.IsNullOrWhiteSpace(phase) ? "unknown" : phase.Trim(),
+                status = string.IsNullOrWhiteSpace(status) ? "No status" : status.Trim(),
+                position = position,
+                distance = distance,
+                angle = Mathf.Acos(Mathf.Clamp(alignment, -1f, 1f)) * Mathf.Rad2Deg
+            });
+        }
+
+        private static void AppendFacingPet(StringBuilder summary, FacingPetContext pet)
+        {
+            summary.Append("'");
+            summary.Append(pet.title);
+            summary.Append("' (");
+            summary.Append(pet.kind);
+            summary.Append(", ");
+            summary.Append(pet.phase);
+            summary.Append(", ");
+            summary.Append(pet.distance.ToString("F1"));
+            summary.Append("m away, ");
+            summary.Append(pet.angle.ToString("F0"));
+            summary.Append(" degrees off-center, status '");
+            summary.Append(pet.status);
+            summary.Append("', at ");
+            summary.Append(FormatVector(pet.position));
+            summary.Append(").");
+        }
+
         private string BuildWorkThreadPrompt(string title)
         {
             StringBuilder prompt = new StringBuilder();
@@ -1056,11 +1259,15 @@ namespace Underwater
             prompt.Append("You are the voice assistant inside a Unity game named Underwater. ");
             prompt.Append("Answer the player's spoken question directly. ");
             prompt.Append("Keep the spoken answer under 45 words unless the player asks for more detail. ");
+            prompt.Append("When the player asks what pet, thread, or thing is in front of them, use the current facing context rather than the nearest thread. ");
             prompt.Append("Be concrete, conversational, and do not mention transcription.");
             prompt.AppendLine();
             prompt.AppendLine();
             prompt.Append("Current world state: ");
             prompt.Append(BuildWorldSummary());
+            prompt.AppendLine();
+            prompt.Append("Current facing context: ");
+            prompt.Append(BuildFacingPetSummary());
             prompt.AppendLine();
             prompt.Append("Nearest thread title: ");
             prompt.Append(nearestThreadTitle);
