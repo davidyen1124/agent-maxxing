@@ -17,7 +17,6 @@ namespace Underwater
     {
         [SerializeField] private string codexServerUrl = "ws://127.0.0.1:4500";
         [SerializeField] private float reconnectDelaySeconds = 3f;
-        [SerializeField] private float worldSyncIntervalSeconds = 3f;
         [SerializeField] private bool autoConnect = true;
 
         private readonly ConcurrentDictionary<int, TaskCompletionSource<Dictionary<string, object>>> pendingResponses =
@@ -25,14 +24,16 @@ namespace Underwater
         private readonly ConcurrentQueue<Action> mainThreadActions = new ConcurrentQueue<Action>();
         private readonly SemaphoreSlim sendGate = new SemaphoreSlim(1, 1);
         private readonly Dictionary<string, PendingWorldThread> pendingWorldThreads = new Dictionary<string, PendingWorldThread>();
+        private readonly Dictionary<string, AppServerThreadRecord> mirroredThreads = new Dictionary<string, AppServerThreadRecord>();
+        private readonly Dictionary<string, AquariumArchivedPetSnapshot> mirroredArchivedPets = new Dictionary<string, AquariumArchivedPetSnapshot>();
+        private readonly HashSet<string> subscribedThreadIds = new HashSet<string>();
 
         private UnderwaterGameDirector director;
         private CancellationTokenSource lifecycleCts;
         private Task connectionLoopTask;
         private ClientWebSocket socket;
         private int requestId;
-        private float nextWorldSyncAt;
-        private bool worldSyncInFlight;
+        private bool bootstrapInFlight;
         private bool appServerSocketOpen;
         private bool codexConnected;
         private string lastCodexPhase = "offline";
@@ -53,6 +54,7 @@ namespace Underwater
             public string statusMessage;
             public string phase;
             public DateTime updatedAtUtc;
+            public string source;
         }
 
         public string BridgeUrl => codexServerUrl;
@@ -80,14 +82,6 @@ namespace Underwater
         private void Update()
         {
             DrainMainThreadActions();
-
-            if (director == null || Time.unscaledTime < nextWorldSyncAt)
-            {
-                return;
-            }
-
-            nextWorldSyncAt = Time.unscaledTime + Mathf.Max(1f, worldSyncIntervalSeconds);
-            RefreshWorldFromCodexState();
         }
 
         private void OnDestroy()
@@ -116,6 +110,12 @@ namespace Underwater
             lifecycleCts.Cancel();
             lifecycleCts.Dispose();
             lifecycleCts = null;
+
+            pendingWorldThreads.Clear();
+            mirroredThreads.Clear();
+            mirroredArchivedPets.Clear();
+            subscribedThreadIds.Clear();
+            bootstrapInFlight = false;
 
             if (socket != null)
             {
@@ -151,7 +151,9 @@ namespace Underwater
                     "You are a Codex work thread spawned from the Underwater reef. " +
                     "Stay focused on the task that created this thread. " +
                     "Use the current workspace when relevant.",
-                ["threadSource"] = "user"
+                ["threadSource"] = "user",
+                ["experimentalRawEvents"] = false,
+                ["persistExtendedHistory"] = false
             };
             string projectRootPath = GetUnityProjectRootPath();
 
@@ -164,6 +166,19 @@ namespace Underwater
 
             string createdThreadId = ReadString(response, "result", "thread", "id") ?? Guid.NewGuid().ToString();
             string initialPrompt = string.IsNullOrWhiteSpace(prompt) ? safeTitle : prompt.Trim();
+
+            EnqueueMainThread(() =>
+            {
+                Dictionary<string, object> thread = Traverse(response, "result", "thread") as Dictionary<string, object>;
+                AppServerThreadRecord record = ReadAppServerThreadRecord(thread);
+
+                if (record != null)
+                {
+                    UpsertMirroredThread(record);
+                    subscribedThreadIds.Add(record.id);
+                    SyncMirroredWorld("Websocket subscribed to spawned thread.");
+                }
+            });
 
             if (!string.IsNullOrWhiteSpace(initialPrompt))
             {
@@ -196,7 +211,7 @@ namespace Underwater
                 };
 
                 SetStatus("ready", $"Created task '{safeTitle}'");
-                RefreshWorldFromCodexState();
+                SyncMirroredWorld("Websocket subscribed to spawned thread.");
             });
 
             return createdThreadId;
@@ -295,10 +310,11 @@ namespace Underwater
             {
                 codexConnected = true;
                 SetStatus("connected", $"Codex app-server ready on {platformFamily ?? "unknown-platform"}");
+                BeginBootstrapWorldFromAppServer();
             });
         }
 
-        private void RefreshWorldFromCodexState()
+        private void BeginBootstrapWorldFromAppServer()
         {
             if (director == null)
             {
@@ -311,38 +327,43 @@ namespace Underwater
                 return;
             }
 
-            if (worldSyncInFlight)
+            if (bootstrapInFlight)
             {
                 return;
             }
 
-            worldSyncInFlight = true;
+            bootstrapInFlight = true;
             CancellationToken token = lifecycleCts != null ? lifecycleCts.Token : CancellationToken.None;
-            _ = RefreshWorldFromAppServerAsync(token);
+            _ = BootstrapWorldFromAppServerAsync(token);
         }
 
-        private async Task RefreshWorldFromAppServerAsync(CancellationToken token)
+        private async Task BootstrapWorldFromAppServerAsync(CancellationToken token)
         {
             try
             {
-                Dictionary<string, object> response = await SendRequestAsync("thread/list", new Dictionary<string, object>(), token);
-                List<AppServerThreadRecord> appThreads = ReadAppServerThreads(response);
+                Dictionary<string, object> activeResponse = await SendRequestAsync("thread/list", BuildThreadListParameters(false), token);
+                Dictionary<string, object> archivedResponse = await SendRequestAsync("thread/list", BuildThreadListParameters(true), token);
+                Dictionary<string, object> loadedResponse = await SendRequestAsync("thread/loaded/list", new Dictionary<string, object>(), token);
+                List<AppServerThreadRecord> appThreads = ReadAppServerThreads(activeResponse);
+                List<AppServerThreadRecord> archivedThreads = ReadAppServerThreads(archivedResponse);
+                List<string> loadedThreadIds = ReadStringList(loadedResponse, "result", "data");
 
                 EnqueueMainThread(() =>
                 {
-                    worldSyncInFlight = false;
-                    SyncAppServerWorldThreads(appThreads);
+                    bootstrapInFlight = false;
+                    SyncAppServerWorldThreads(appThreads, archivedThreads, "Websocket connected.");
+                    SubscribeToLoadedThreads(loadedThreadIds);
                 });
             }
             catch (OperationCanceledException)
             {
-                EnqueueMainThread(() => worldSyncInFlight = false);
+                EnqueueMainThread(() => bootstrapInFlight = false);
             }
             catch (Exception ex)
             {
                 EnqueueMainThread(() =>
                 {
-                    worldSyncInFlight = false;
+                    bootstrapInFlight = false;
 
                     if (director != null)
                     {
@@ -354,17 +375,34 @@ namespace Underwater
             }
         }
 
-        private void SyncAppServerWorldThreads(List<AppServerThreadRecord> appThreads)
+        private static Dictionary<string, object> BuildThreadListParameters(bool archived)
+        {
+            return new Dictionary<string, object>
+            {
+                ["limit"] = 50,
+                ["sortKey"] = "updated_at",
+                ["archived"] = archived,
+                ["sourceKinds"] = new List<object>
+                {
+                    "cli",
+                    "vscode",
+                    "appServer"
+                }
+            };
+        }
+
+        private void SyncAppServerWorldThreads(List<AppServerThreadRecord> appThreads, List<AppServerThreadRecord> archivedThreads, string connectionLabel)
         {
             if (director == null)
             {
                 return;
             }
 
-            List<AquariumThreadSnapshot> liveThreads = new List<AquariumThreadSnapshot>();
-            List<AquariumArchivedPetSnapshot> archivedPets = new List<AquariumArchivedPetSnapshot>();
             HashSet<string> appThreadIds = new HashSet<string>();
             List<string> resolvedPendingIds = new List<string>();
+
+            mirroredThreads.Clear();
+            mirroredArchivedPets.Clear();
 
             for (int i = 0; i < appThreads.Count; i++)
             {
@@ -376,7 +414,19 @@ namespace Underwater
                 }
 
                 appThreadIds.Add(record.id);
-                liveThreads.Add(CreateThreadSnapshot(record, "app-server"));
+                mirroredThreads[record.id] = record;
+            }
+
+            for (int i = 0; i < archivedThreads.Count; i++)
+            {
+                AppServerThreadRecord record = archivedThreads[i];
+
+                if (string.IsNullOrWhiteSpace(record.id) || string.IsNullOrWhiteSpace(record.title))
+                {
+                    continue;
+                }
+
+                mirroredArchivedPets[record.id] = CreateArchivedPetSnapshot(record);
             }
 
             foreach (KeyValuePair<string, PendingWorldThread> pair in pendingWorldThreads)
@@ -392,8 +442,84 @@ namespace Underwater
                 pendingWorldThreads.Remove(resolvedPendingIds[i]);
             }
 
-            AddPendingThreadSnapshots(liveThreads, appThreadIds);
-            SortAndSyncWorld(liveThreads, archivedPets, "Websocket connected.");
+            SyncMirroredWorld(connectionLabel);
+        }
+
+        private void SubscribeToLoadedThreads(List<string> threadIds)
+        {
+            if (threadIds == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < threadIds.Count; i++)
+            {
+                SubscribeToThread(threadIds[i]);
+            }
+        }
+
+        private void SubscribeToThread(string threadId)
+        {
+            if (string.IsNullOrWhiteSpace(threadId) || subscribedThreadIds.Contains(threadId))
+            {
+                return;
+            }
+
+            subscribedThreadIds.Add(threadId);
+            CancellationToken token = lifecycleCts != null ? lifecycleCts.Token : CancellationToken.None;
+            _ = SubscribeToThreadAsync(threadId.Trim(), token);
+        }
+
+        private async Task SubscribeToThreadAsync(string threadId, CancellationToken token)
+        {
+            try
+            {
+                Dictionary<string, object> response = await SendRequestAsync(
+                    "thread/resume",
+                    new Dictionary<string, object>
+                    {
+                        ["threadId"] = threadId,
+                        ["excludeTurns"] = true,
+                        ["persistExtendedHistory"] = false
+                    },
+                    token);
+
+                EnqueueMainThread(() =>
+                {
+                    Dictionary<string, object> thread = Traverse(response, "result", "thread") as Dictionary<string, object>;
+                    AppServerThreadRecord record = ReadAppServerThreadRecord(thread);
+
+                    if (record != null)
+                    {
+                        UpsertMirroredThread(record);
+                        SyncMirroredWorld("Websocket subscribed to loaded threads.");
+                    }
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                EnqueueMainThread(() => subscribedThreadIds.Remove(threadId));
+            }
+            catch (Exception ex)
+            {
+                EnqueueMainThread(() =>
+                {
+                    subscribedThreadIds.Remove(threadId);
+                    Debug.LogWarning($"[AquariumDirectorBridge] Could not subscribe to Codex thread '{threadId}': {ex.Message}");
+                });
+            }
+        }
+
+        private void UpsertMirroredThread(AppServerThreadRecord record)
+        {
+            if (record == null || string.IsNullOrWhiteSpace(record.id))
+            {
+                return;
+            }
+
+            mirroredThreads[record.id] = record;
+            mirroredArchivedPets.Remove(record.id);
+            pendingWorldThreads.Remove(record.id);
         }
 
         private void SyncPendingWorldThreads(string connectionLabel)
@@ -433,6 +559,40 @@ namespace Underwater
             }
         }
 
+        private void SyncMirroredWorld(string connectionLabel)
+        {
+            if (director == null)
+            {
+                return;
+            }
+
+            List<AquariumThreadSnapshot> liveThreads = new List<AquariumThreadSnapshot>(mirroredThreads.Count + pendingWorldThreads.Count);
+            List<AquariumArchivedPetSnapshot> archivedPets = new List<AquariumArchivedPetSnapshot>(mirroredArchivedPets.Count);
+            HashSet<string> knownThreadIds = new HashSet<string>();
+
+            foreach (KeyValuePair<string, AppServerThreadRecord> pair in mirroredThreads)
+            {
+                if (string.IsNullOrWhiteSpace(pair.Key) || pair.Value == null)
+                {
+                    continue;
+                }
+
+                knownThreadIds.Add(pair.Key);
+                liveThreads.Add(CreateThreadSnapshot(pair.Value));
+            }
+
+            foreach (KeyValuePair<string, AquariumArchivedPetSnapshot> pair in mirroredArchivedPets)
+            {
+                if (pair.Value != null)
+                {
+                    archivedPets.Add(pair.Value);
+                }
+            }
+
+            AddPendingThreadSnapshots(liveThreads, knownThreadIds);
+            SortAndSyncWorld(liveThreads, archivedPets, connectionLabel);
+        }
+
         private void SortAndSyncWorld(List<AquariumThreadSnapshot> liveThreads, List<AquariumArchivedPetSnapshot> archivedPets, string connectionLabel)
         {
             if (director == null)
@@ -458,7 +618,7 @@ namespace Underwater
             director.UpdateBridgeState(codexConnected ? "ready" : "offline", detail);
         }
 
-        private AquariumThreadSnapshot CreateThreadSnapshot(AppServerThreadRecord record, string source)
+        private AquariumThreadSnapshot CreateThreadSnapshot(AppServerThreadRecord record)
         {
             float ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - record.updatedAtUtc).TotalMinutes);
 
@@ -468,8 +628,18 @@ namespace Underwater
                 title = record.title,
                 statusMessage = record.statusMessage,
                 phase = string.IsNullOrWhiteSpace(record.phase) ? DetermineThreadPhase(ageMinutes) : record.phase,
-                source = source,
+                source = string.IsNullOrWhiteSpace(record.source) ? "app-server" : record.source,
                 ageMinutes = ageMinutes
+            };
+        }
+
+        private static AquariumArchivedPetSnapshot CreateArchivedPetSnapshot(AppServerThreadRecord record)
+        {
+            return new AquariumArchivedPetSnapshot
+            {
+                id = record.id,
+                title = record.title,
+                statusMessage = string.IsNullOrWhiteSpace(record.statusMessage) ? "Archived" : record.statusMessage
             };
         }
 
@@ -510,33 +680,50 @@ namespace Underwater
                     continue;
                 }
 
-                string id = ReadString(thread, "id") ?? ReadString(thread, "sessionId");
-                string title = ReadThreadTitle(thread);
+                AppServerThreadRecord record = ReadAppServerThreadRecord(thread);
 
-                if (string.IsNullOrWhiteSpace(id))
+                if (record == null)
                 {
                     continue;
                 }
 
-                DateTime updatedAtUtc = ReadUnixTimestampSeconds(thread, "updatedAt")
-                    ?? ReadUnixTimestampSeconds(thread, "updated_at")
-                    ?? ReadUnixTimestampSeconds(thread, "createdAt")
-                    ?? ReadUnixTimestampSeconds(thread, "created_at")
-                    ?? DateTime.UtcNow;
-                string statusId = ReadThreadStatusId(thread);
-                float ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - updatedAtUtc).TotalMinutes);
-
-                records.Add(new AppServerThreadRecord
-                {
-                    id = id.Trim(),
-                    title = title.Trim(),
-                    statusMessage = BuildThreadStatusMessage(thread, statusId),
-                    phase = DetermineThreadPhase(statusId, ageMinutes),
-                    updatedAtUtc = updatedAtUtc
-                });
+                records.Add(record);
             }
 
             return records;
+        }
+
+        private static AppServerThreadRecord ReadAppServerThreadRecord(Dictionary<string, object> thread)
+        {
+            if (thread == null)
+            {
+                return null;
+            }
+
+            string id = ReadString(thread, "id") ?? ReadString(thread, "sessionId");
+
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return null;
+            }
+
+            DateTime updatedAtUtc = ReadUnixTimestampSeconds(thread, "updatedAt")
+                ?? ReadUnixTimestampSeconds(thread, "updated_at")
+                ?? ReadUnixTimestampSeconds(thread, "createdAt")
+                ?? ReadUnixTimestampSeconds(thread, "created_at")
+                ?? DateTime.UtcNow;
+            string statusId = ReadThreadStatusId(thread);
+            float ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - updatedAtUtc).TotalMinutes);
+
+            return new AppServerThreadRecord
+            {
+                id = id.Trim(),
+                title = ReadThreadTitle(thread).Trim(),
+                statusMessage = BuildThreadStatusMessage(thread, statusId),
+                phase = DetermineThreadPhase(statusId, ageMinutes),
+                updatedAtUtc = updatedAtUtc,
+                source = ReadSourceLabel(thread)
+            };
         }
 
         private static string ReadThreadTitle(Dictionary<string, object> thread)
@@ -555,6 +742,37 @@ namespace Underwater
 
             string cleaned = CleanBubbleText(title, 80);
             return string.IsNullOrWhiteSpace(cleaned) ? "New chat" : cleaned;
+        }
+
+        private static string ReadSourceLabel(Dictionary<string, object> thread)
+        {
+            string source = ReadString(thread, "source");
+
+            if (!string.IsNullOrWhiteSpace(source))
+            {
+                return source.Trim();
+            }
+
+            object sourceValue = Traverse(thread, "source");
+
+            if (sourceValue is Dictionary<string, object> sourceObject)
+            {
+                string custom = ReadString(sourceObject, "custom");
+
+                if (!string.IsNullOrWhiteSpace(custom))
+                {
+                    return custom.Trim();
+                }
+
+                string subAgent = ReadString(sourceObject, "subAgent");
+
+                if (!string.IsNullOrWhiteSpace(subAgent))
+                {
+                    return "subAgent";
+                }
+            }
+
+            return "app-server";
         }
 
         private static string BuildThreadStatusMessage(Dictionary<string, object> thread, string statusId)
@@ -580,6 +798,81 @@ namespace Underwater
                     return "Idle";
                 default:
                     return "Info";
+            }
+        }
+
+        private static string ReadTurnCompletionMessage(Dictionary<string, object> turn)
+        {
+            string status = ReadString(turn, "status");
+
+            switch ((status ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "failed":
+                    string errorMessage = ReadString(turn, "error", "message");
+                    return string.IsNullOrWhiteSpace(errorMessage) ? "Blocked" : CleanBubbleText(errorMessage, 72);
+                case "interrupted":
+                    return "Interrupted";
+                default:
+                    return "Idle";
+            }
+        }
+
+        private static string BuildItemStatusMessage(Dictionary<string, object> item, bool started)
+        {
+            if (item == null)
+            {
+                return null;
+            }
+
+            string type = ReadString(item, "type");
+
+            switch (type)
+            {
+                case "reasoning":
+                    string reasoning = ReadLatestReasoningOrAgentMessage(new List<object> { item });
+                    return string.IsNullOrWhiteSpace(reasoning) ? "Thinking" : reasoning;
+                case "agentMessage":
+                    string message = CleanBubbleText(ReadString(item, "text"), 72);
+                    return string.IsNullOrWhiteSpace(message) ? started ? "Writing" : "Responded" : message;
+                case "plan":
+                    string plan = CleanBubbleText(ReadString(item, "text"), 72);
+                    return string.IsNullOrWhiteSpace(plan) ? "Planning" : plan;
+                case "commandExecution":
+                    return BuildCommandActivityMessage(item, started || string.Equals(ReadString(item, "status"), "inProgress", StringComparison.Ordinal));
+                case "fileChange":
+                    return BuildFileChangeActivityMessage(item, started || string.Equals(ReadString(item, "status"), "inProgress", StringComparison.Ordinal));
+                case "mcpToolCall":
+                    return BuildMcpToolActivityMessage(item, started || string.Equals(ReadString(item, "status"), "inProgress", StringComparison.Ordinal));
+                case "webSearch":
+                    return BuildWebSearchActivityMessage(item);
+                case "contextCompaction":
+                    return "Compacting context";
+                case "userMessage":
+                    return started ? "Reading prompt" : "Prompt received";
+                default:
+                    return null;
+            }
+        }
+
+        private static string DetermineItemPhase(Dictionary<string, object> item, bool started)
+        {
+            string type = ReadString(item, "type");
+
+            switch (type)
+            {
+                case "agentMessage":
+                    return "responding";
+                case "reasoning":
+                case "plan":
+                    return started ? "working" : "responding";
+                case "commandExecution":
+                case "fileChange":
+                case "mcpToolCall":
+                case "webSearch":
+                case "contextCompaction":
+                    return started ? "working" : "responding";
+                default:
+                    return started ? "working" : "idle";
             }
         }
 
@@ -628,7 +921,9 @@ namespace Underwater
             switch ((type ?? string.Empty).Trim().ToLowerInvariant())
             {
                 case "active":
-                    return HasActiveFlag(status, "waitingOnUserInput") ? "waiting" : "running";
+                    return HasActiveFlag(status, "waitingOnUserInput") || HasActiveFlag(status, "waitingOnApproval")
+                        ? "waiting"
+                        : "running";
                 case "systemerror":
                     return "failed";
             }
@@ -904,6 +1199,23 @@ namespace Underwater
             return cleaned.Substring(0, Mathf.Max(0, maxLength - 3)).TrimEnd() + "...";
         }
 
+        private static string Shorten(string value, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = value.Trim();
+
+            if (trimmed.Length <= maxLength)
+            {
+                return trimmed;
+            }
+
+            return trimmed.Substring(0, Mathf.Max(0, maxLength - 3)).TrimEnd() + "...";
+        }
+
         private static DateTime? ReadUnixTimestampSeconds(Dictionary<string, object> root, string key)
         {
             if (root == null || !root.TryGetValue(key, out object value))
@@ -1021,14 +1333,268 @@ namespace Underwater
             }
 
             string method = root["method"] as string;
+            Dictionary<string, object> parameters = root.ContainsKey("params")
+                ? root["params"] as Dictionary<string, object>
+                : null;
 
             if (string.Equals(method, "error", StringComparison.Ordinal))
             {
-                Dictionary<string, object> parameters = root.ContainsKey("params")
-                    ? root["params"] as Dictionary<string, object>
-                    : null;
                 EnqueueMainThread(() => SetStatus("warning", ReadString(parameters, "message") ?? "Codex app-server error"));
+                return;
             }
+
+            HandleServerNotification(method, parameters);
+        }
+
+        private void HandleServerNotification(string method, Dictionary<string, object> parameters)
+        {
+            if (string.IsNullOrWhiteSpace(method))
+            {
+                return;
+            }
+
+            switch (method)
+            {
+                case "thread/started":
+                    EnqueueMainThread(() => HandleThreadStarted(parameters));
+                    break;
+                case "thread/status/changed":
+                    EnqueueMainThread(() => HandleThreadStatusChanged(parameters));
+                    break;
+                case "thread/name/updated":
+                    EnqueueMainThread(() => HandleThreadNameUpdated(parameters));
+                    break;
+                case "thread/archived":
+                    EnqueueMainThread(() => HandleThreadArchived(parameters));
+                    break;
+                case "thread/unarchived":
+                    EnqueueMainThread(() => HandleThreadUnarchived(parameters));
+                    break;
+                case "thread/closed":
+                    EnqueueMainThread(() => HandleThreadClosed(parameters));
+                    break;
+                case "turn/started":
+                    EnqueueMainThread(() => HandleTurnLifecycle(parameters, true));
+                    break;
+                case "turn/completed":
+                    EnqueueMainThread(() => HandleTurnLifecycle(parameters, false));
+                    break;
+                case "item/started":
+                    EnqueueMainThread(() => HandleThreadItem(parameters, true));
+                    break;
+                case "item/completed":
+                case "rawResponseItem/completed":
+                    EnqueueMainThread(() => HandleThreadItem(parameters, false));
+                    break;
+                case "item/agentMessage/delta":
+                case "item/plan/delta":
+                case "command/exec/outputDelta":
+                case "process/outputDelta":
+                case "item/commandExecution/outputDelta":
+                case "item/fileChange/outputDelta":
+                case "item/fileChange/patchUpdated":
+                case "item/mcpToolCall/progress":
+                case "serverRequest/resolved":
+                case "thread/tokenUsage/updated":
+                    break;
+                case "warning":
+                case "guardianWarning":
+                case "configWarning":
+                case "deprecationNotice":
+                    EnqueueMainThread(() => SetStatus("warning", ReadString(parameters, "message") ?? method));
+                    break;
+            }
+        }
+
+        private void HandleThreadStarted(Dictionary<string, object> parameters)
+        {
+            AppServerThreadRecord record = ReadAppServerThreadRecord(Traverse(parameters, "thread") as Dictionary<string, object>);
+
+            if (record == null)
+            {
+                return;
+            }
+
+            UpsertMirroredThread(record);
+            subscribedThreadIds.Add(record.id);
+            SyncMirroredWorld("Websocket thread event received.");
+        }
+
+        private void HandleThreadStatusChanged(Dictionary<string, object> parameters)
+        {
+            string threadId = ReadString(parameters, "threadId");
+
+            if (string.IsNullOrWhiteSpace(threadId))
+            {
+                return;
+            }
+
+            AppServerThreadRecord record = GetOrCreateMirroredThread(threadId);
+            Dictionary<string, object> thread = new Dictionary<string, object>
+            {
+                ["status"] = Traverse(parameters, "status")
+            };
+            string statusId = ReadThreadStatusId(thread);
+            float ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - record.updatedAtUtc).TotalMinutes);
+            record.statusMessage = BuildThreadStatusMessage(thread, statusId);
+            record.phase = DetermineThreadPhase(statusId, ageMinutes);
+            record.updatedAtUtc = DateTime.UtcNow;
+            SyncMirroredWorld("Websocket thread status updated.");
+        }
+
+        private void HandleThreadNameUpdated(Dictionary<string, object> parameters)
+        {
+            string threadId = ReadString(parameters, "threadId");
+
+            if (string.IsNullOrWhiteSpace(threadId))
+            {
+                return;
+            }
+
+            AppServerThreadRecord record = GetOrCreateMirroredThread(threadId);
+            string threadName = ReadString(parameters, "threadName");
+
+            if (!string.IsNullOrWhiteSpace(threadName))
+            {
+                record.title = CleanBubbleText(threadName, 80);
+            }
+
+            record.updatedAtUtc = DateTime.UtcNow;
+            SyncMirroredWorld("Websocket thread name updated.");
+        }
+
+        private void HandleThreadArchived(Dictionary<string, object> parameters)
+        {
+            string threadId = ReadString(parameters, "threadId");
+
+            if (string.IsNullOrWhiteSpace(threadId))
+            {
+                return;
+            }
+
+            if (mirroredThreads.TryGetValue(threadId, out AppServerThreadRecord record))
+            {
+                mirroredArchivedPets[threadId] = CreateArchivedPetSnapshot(record);
+                mirroredThreads.Remove(threadId);
+            }
+            else
+            {
+                mirroredArchivedPets[threadId] = new AquariumArchivedPetSnapshot
+                {
+                    id = threadId,
+                    title = Shorten(threadId, 12),
+                    statusMessage = "Archived"
+                };
+            }
+
+            pendingWorldThreads.Remove(threadId);
+            subscribedThreadIds.Remove(threadId);
+            SyncMirroredWorld("Websocket thread archived.");
+        }
+
+        private void HandleThreadUnarchived(Dictionary<string, object> parameters)
+        {
+            string threadId = ReadString(parameters, "threadId");
+
+            if (string.IsNullOrWhiteSpace(threadId))
+            {
+                return;
+            }
+
+            if (mirroredArchivedPets.TryGetValue(threadId, out AquariumArchivedPetSnapshot archivedPet))
+            {
+                mirroredArchivedPets.Remove(threadId);
+                UpsertMirroredThread(new AppServerThreadRecord
+                {
+                    id = threadId,
+                    title = archivedPet.title,
+                    statusMessage = "Idle",
+                    phase = "idle",
+                    updatedAtUtc = DateTime.UtcNow,
+                    source = "app-server"
+                });
+            }
+
+            SubscribeToThread(threadId);
+            SyncMirroredWorld("Websocket thread unarchived.");
+        }
+
+        private void HandleThreadClosed(Dictionary<string, object> parameters)
+        {
+            string threadId = ReadString(parameters, "threadId");
+
+            if (string.IsNullOrWhiteSpace(threadId) || !mirroredThreads.TryGetValue(threadId, out AppServerThreadRecord record))
+            {
+                return;
+            }
+
+            subscribedThreadIds.Remove(threadId);
+            record.statusMessage = "Idle";
+            record.phase = "idle";
+            record.updatedAtUtc = DateTime.UtcNow;
+            SyncMirroredWorld("Websocket thread closed.");
+        }
+
+        private void HandleTurnLifecycle(Dictionary<string, object> parameters, bool started)
+        {
+            string threadId = ReadString(parameters, "threadId");
+
+            if (string.IsNullOrWhiteSpace(threadId))
+            {
+                return;
+            }
+
+            AppServerThreadRecord record = GetOrCreateMirroredThread(threadId);
+            record.statusMessage = started ? "Thinking" : ReadTurnCompletionMessage(Traverse(parameters, "turn") as Dictionary<string, object>);
+            record.phase = started ? "working" : DetermineThreadPhase(0f);
+            record.updatedAtUtc = DateTime.UtcNow;
+            SyncMirroredWorld(started ? "Websocket turn started." : "Websocket turn completed.");
+        }
+
+        private void HandleThreadItem(Dictionary<string, object> parameters, bool started)
+        {
+            string threadId = ReadString(parameters, "threadId");
+            Dictionary<string, object> item = Traverse(parameters, "item") as Dictionary<string, object>;
+
+            if (string.IsNullOrWhiteSpace(threadId) || item == null)
+            {
+                return;
+            }
+
+            string message = BuildItemStatusMessage(item, started);
+
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            AppServerThreadRecord record = GetOrCreateMirroredThread(threadId);
+            record.statusMessage = message;
+            record.phase = DetermineItemPhase(item, started);
+            record.updatedAtUtc = DateTime.UtcNow;
+            SyncMirroredWorld(started ? "Websocket item started." : "Websocket item completed.");
+        }
+
+        private AppServerThreadRecord GetOrCreateMirroredThread(string threadId)
+        {
+            if (mirroredThreads.TryGetValue(threadId, out AppServerThreadRecord record))
+            {
+                return record;
+            }
+
+            record = new AppServerThreadRecord
+            {
+                id = threadId.Trim(),
+                title = Shorten(threadId, 12),
+                statusMessage = "Idle",
+                phase = "idle",
+                updatedAtUtc = DateTime.UtcNow,
+                source = "app-server"
+            };
+            mirroredThreads[record.id] = record;
+            mirroredArchivedPets.Remove(record.id);
+            pendingWorldThreads.Remove(record.id);
+            return record;
         }
 
         private void ResolvePendingResponse(Dictionary<string, object> root)
@@ -1202,6 +1768,27 @@ namespace Underwater
         {
             object value = Traverse(root, path);
             return value as string;
+        }
+
+        private static List<string> ReadStringList(Dictionary<string, object> root, params string[] path)
+        {
+            List<string> values = new List<string>();
+            object value = Traverse(root, path);
+
+            if (!(value is List<object> items))
+            {
+                return values;
+            }
+
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (items[i] is string item && !string.IsNullOrWhiteSpace(item))
+                {
+                    values.Add(item.Trim());
+                }
+            }
+
+            return values;
         }
 
         private static string GetUnityProjectRootPath()
