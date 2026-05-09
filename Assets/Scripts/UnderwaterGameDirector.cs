@@ -27,6 +27,8 @@ namespace Underwater
         private const float TerrainModeBasemapDistance = 180f;
         private const float TerrainThreadInitialMinRadius = 28f;
         private const float TerrainThreadInitialMaxRadius = 86f;
+        private const float TerrainModeDaySunIntensity = 5f;
+        private const float TerrainModeNightSunIntensity = 1.45f;
         private const float DefaultAtmosphereIntensity = 0.55f;
 
         [SerializeField] private string defaultOpenAiRealtimeModel = "gpt-realtime-2";
@@ -1551,6 +1553,13 @@ namespace Underwater
             EnsureAtmosphereReferences();
 
             float intensity = Mathf.Clamp01(atmosphereIntensity);
+
+            if (usingSceneTerrain)
+            {
+                ApplyTerrainAtmosphereProfile(intensity);
+                return;
+            }
+
             Color backgroundColor;
             Color fogColor;
             Color ambientSky;
@@ -1609,17 +1618,6 @@ namespace Underwater
                     break;
             }
 
-            if (usingSceneTerrain)
-            {
-                backgroundColor = Color.Lerp(backgroundColor, new Color(0.025f, 0.15f, 0.21f), 0.35f);
-                fogColor = Color.Lerp(fogColor, new Color(0.04f, 0.18f, 0.23f), 0.4f);
-                ambientSky = Color.Lerp(ambientSky, new Color(0.16f, 0.32f, 0.38f), 0.55f);
-                ambientEquator = Color.Lerp(ambientEquator, new Color(0.11f, 0.25f, 0.28f), 0.55f);
-                ambientGround = Color.Lerp(ambientGround, new Color(0.045f, 0.085f, 0.095f), 0.45f);
-                sunIntensity = Mathf.Max(sunIntensity, atmosphereTimeOfDay == "night" ? 0.45f : 1.35f);
-                baseFogDensity = Mathf.Min(baseFogDensity, atmosphereTimeOfDay == "night" ? 0.011f : 0.0075f);
-            }
-
             float weatherFogBoost = WeatherFogBoost(atmosphereWeather, intensity);
             float sunWeatherMultiplier = WeatherSunMultiplier(atmosphereWeather, intensity);
 
@@ -1643,14 +1641,166 @@ namespace Underwater
 
             if (atmosphereSun != null)
             {
+                atmosphereSun.enabled = true;
                 atmosphereSun.type = LightType.Directional;
+                atmosphereSun.lightmapBakeType = LightmapBakeType.Realtime;
                 atmosphereSun.color = Color.Lerp(sunColor, WeatherTint(atmosphereWeather), Mathf.Clamp01(intensity * 0.18f));
                 atmosphereSun.intensity = sunIntensity * sunWeatherMultiplier;
                 atmosphereSun.transform.rotation = sunRotation;
+                RenderSettings.sun = atmosphereSun;
             }
 
             ApplyAtmospherePostProcessing(intensity);
             ApplyWeatherParticles(intensity);
+        }
+
+        private void ApplyTerrainAtmosphereProfile(float intensity)
+        {
+            Color backgroundColor;
+            Color fogColor;
+            Color ambientSky;
+            Color ambientEquator;
+            Color ambientGround;
+            Color sunColor;
+            Quaternion sunRotation;
+            float sunIntensity;
+            float fogDensity;
+
+            switch (atmosphereTimeOfDay)
+            {
+                case "dawn":
+                    backgroundColor = new Color(0.52f, 0.64f, 0.77f);
+                    fogColor = new Color(0.62f, 0.66f, 0.64f);
+                    ambientSky = new Color(0.48f, 0.53f, 0.56f);
+                    ambientEquator = new Color(0.42f, 0.43f, 0.38f);
+                    ambientGround = new Color(0.24f, 0.22f, 0.18f);
+                    sunColor = new Color(1f, 0.71f, 0.43f);
+                    sunRotation = Quaternion.Euler(24f, -38f, 0f);
+                    sunIntensity = 3.2f;
+                    fogDensity = 0.0007f;
+                    break;
+                case "sunset":
+                    backgroundColor = new Color(0.48f, 0.54f, 0.68f);
+                    fogColor = new Color(0.58f, 0.5f, 0.46f);
+                    ambientSky = new Color(0.42f, 0.44f, 0.52f);
+                    ambientEquator = new Color(0.39f, 0.35f, 0.3f);
+                    ambientGround = new Color(0.2f, 0.18f, 0.16f);
+                    sunColor = new Color(1f, 0.55f, 0.31f);
+                    sunRotation = Quaternion.Euler(18f, 32f, 0f);
+                    sunIntensity = 2.7f;
+                    fogDensity = 0.0008f;
+                    break;
+                case "night":
+                    backgroundColor = new Color(0.075f, 0.11f, 0.18f);
+                    fogColor = new Color(0.08f, 0.12f, 0.18f);
+                    ambientSky = new Color(0.24f, 0.29f, 0.38f);
+                    ambientEquator = new Color(0.16f, 0.19f, 0.24f);
+                    ambientGround = new Color(0.075f, 0.085f, 0.1f);
+                    sunColor = new Color(0.62f, 0.74f, 1f);
+                    sunRotation = Quaternion.Euler(145f, -34f, 0f);
+                    sunIntensity = TerrainModeNightSunIntensity;
+                    fogDensity = 0.00075f;
+                    break;
+                default:
+                    backgroundColor = new Color(0.56f, 0.75f, 0.92f);
+                    fogColor = new Color(0.82f, 0.9f, 1f);
+                    ambientSky = new Color(0.58f, 0.68f, 0.72f);
+                    ambientEquator = new Color(0.46f, 0.52f, 0.45f);
+                    ambientGround = new Color(0.28f, 0.32f, 0.25f);
+                    sunColor = Color.white;
+                    sunRotation = Quaternion.Euler(50f, -32f, 0f);
+                    sunIntensity = TerrainModeDaySunIntensity;
+                    fogDensity = 0.00045f;
+                    break;
+            }
+
+            float weatherStrength = intensity;
+
+            switch (atmosphereWeather)
+            {
+                case "fog":
+                    fogDensity += Mathf.Lerp(0.0015f, 0.0075f, weatherStrength);
+                    sunIntensity *= Mathf.Lerp(0.92f, 0.55f, weatherStrength);
+                    fogColor = Color.Lerp(fogColor, new Color(0.68f, 0.78f, 0.8f), 0.55f);
+                    break;
+                case "rain":
+                    fogDensity += Mathf.Lerp(0.0008f, 0.0035f, weatherStrength);
+                    sunIntensity *= Mathf.Lerp(0.9f, 0.65f, weatherStrength);
+                    backgroundColor = Color.Lerp(backgroundColor, new Color(0.34f, 0.43f, 0.52f), 0.45f);
+                    fogColor = Color.Lerp(fogColor, new Color(0.48f, 0.58f, 0.66f), 0.45f);
+                    break;
+                case "storm":
+                    fogDensity += Mathf.Lerp(0.0018f, 0.007f, weatherStrength);
+                    sunIntensity *= Mathf.Lerp(0.75f, 0.38f, weatherStrength);
+                    backgroundColor = Color.Lerp(backgroundColor, new Color(0.2f, 0.24f, 0.32f), 0.65f);
+                    fogColor = Color.Lerp(fogColor, new Color(0.28f, 0.32f, 0.4f), 0.6f);
+                    break;
+                case "snow":
+                    fogDensity += Mathf.Lerp(0.001f, 0.0045f, weatherStrength);
+                    sunIntensity *= Mathf.Lerp(0.96f, 0.78f, weatherStrength);
+                    fogColor = Color.Lerp(fogColor, new Color(0.86f, 0.94f, 1f), 0.5f);
+                    break;
+            }
+
+            Camera camera = Camera.main;
+
+            if (camera != null)
+            {
+                camera.clearFlags = RenderSettings.skybox != null ? CameraClearFlags.Skybox : CameraClearFlags.SolidColor;
+                camera.backgroundColor = backgroundColor;
+            }
+
+            RenderSettings.fog = true;
+            RenderSettings.fogMode = FogMode.Exponential;
+            RenderSettings.fogDensity = Mathf.Clamp(fogDensity, 0.0002f, 0.012f);
+            RenderSettings.fogColor = fogColor;
+            RenderSettings.ambientMode = AmbientMode.Trilight;
+            RenderSettings.ambientSkyColor = ambientSky;
+            RenderSettings.ambientEquatorColor = ambientEquator;
+            RenderSettings.ambientGroundColor = ambientGround;
+            RenderSettings.reflectionIntensity = atmosphereTimeOfDay == "night" ? 0.38f : 0.85f;
+
+            if (atmosphereSun != null)
+            {
+                atmosphereSun.enabled = true;
+                atmosphereSun.type = LightType.Directional;
+                atmosphereSun.lightmapBakeType = LightmapBakeType.Realtime;
+                atmosphereSun.shadows = LightShadows.Soft;
+                atmosphereSun.color = sunColor;
+                atmosphereSun.intensity = sunIntensity;
+                atmosphereSun.transform.rotation = sunRotation;
+                RenderSettings.sun = atmosphereSun;
+            }
+
+            ApplyTerrainPostProcessing(intensity);
+            ApplyWeatherParticles(intensity);
+        }
+
+        private void ApplyTerrainPostProcessing(float intensity)
+        {
+            if (atmosphereBloom != null)
+            {
+                atmosphereBloom.active = true;
+                atmosphereBloom.threshold.Override(1.1f);
+                atmosphereBloom.intensity.Override(atmosphereTimeOfDay == "night" ? 0.18f : 0.25f);
+                atmosphereBloom.scatter.Override(0.45f);
+            }
+
+            if (atmosphereVignette != null)
+            {
+                atmosphereVignette.active = true;
+                float stormVignette = atmosphereWeather == "storm" ? 0.08f * intensity : 0f;
+                atmosphereVignette.intensity.Override((atmosphereTimeOfDay == "night" ? 0.08f : 0.045f) + stormVignette);
+                atmosphereVignette.smoothness.Override(0.5f);
+            }
+
+            if (atmosphereColorAdjustments != null)
+            {
+                atmosphereColorAdjustments.active = true;
+                atmosphereColorAdjustments.postExposure.Override(atmosphereTimeOfDay == "night" ? -0.08f : 0f);
+                atmosphereColorAdjustments.saturation.Override(atmosphereWeather == "storm" ? -12f : 4f);
+                atmosphereColorAdjustments.colorFilter.Override(Color.white);
+            }
         }
 
         private void ApplyAtmospherePostProcessing(float intensity)
@@ -1667,7 +1817,8 @@ namespace Underwater
             {
                 atmosphereVignette.active = true;
                 float weatherVignette = atmosphereWeather == "storm" ? 0.14f * intensity : 0f;
-                atmosphereVignette.intensity.Override((atmosphereTimeOfDay == "night" ? 0.34f : 0.22f) + weatherVignette);
+                float baseVignette = atmosphereTimeOfDay == "night" ? 0.34f : 0.22f;
+                atmosphereVignette.intensity.Override(baseVignette + weatherVignette);
                 atmosphereVignette.smoothness.Override(0.65f);
             }
 
@@ -1749,16 +1900,7 @@ namespace Underwater
         {
             if (atmosphereSun == null)
             {
-                Light[] lights = FindObjectsByType<Light>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
-
-                for (int i = 0; i < lights.Length; i++)
-                {
-                    if (lights[i] != null && lights[i].type == LightType.Directional)
-                    {
-                        atmosphereSun = lights[i];
-                        break;
-                    }
-                }
+                atmosphereSun = FindDirectionalLight();
             }
 
             if (atmosphereSun == null)
@@ -1767,6 +1909,10 @@ namespace Underwater
                 atmosphereSun = lightObject.AddComponent<Light>();
                 atmosphereSun.type = LightType.Directional;
             }
+
+            atmosphereSun.enabled = true;
+            atmosphereSun.lightmapBakeType = LightmapBakeType.Realtime;
+            RenderSettings.sun = atmosphereSun;
 
             if (atmosphereBloom != null && atmosphereVignette != null && atmosphereColorAdjustments != null)
             {
@@ -1911,6 +2057,10 @@ namespace Underwater
             if (normalized == "morning" || normalized == "sunrise")
             {
                 normalized = "dawn";
+            }
+            else if (normalized == "daylight" || normalized == "daytime" || normalized == "noon" || normalized == "afternoon")
+            {
+                normalized = "day";
             }
             else if (normalized == "evening" || normalized == "dusk")
             {
@@ -2119,7 +2269,7 @@ namespace Underwater
             RenderSettings.ambientGroundColor = new Color(0.02f, 0.05f, 0.06f);
             RenderSettings.reflectionIntensity = 0.35f;
 
-            Light sun = FindAnyObjectByType<Light>();
+            Light sun = FindDirectionalLight();
 
             if (sun == null)
             {
@@ -2128,10 +2278,28 @@ namespace Underwater
                 sun.type = LightType.Directional;
             }
 
+            sun.enabled = true;
+            sun.lightmapBakeType = LightmapBakeType.Realtime;
             sun.color = new Color(0.53f, 0.82f, 0.94f);
             sun.intensity = 0.52f;
             sun.transform.rotation = Quaternion.Euler(60f, -24f, 0f);
             atmosphereSun = sun;
+            RenderSettings.sun = sun;
+        }
+
+        private static Light FindDirectionalLight()
+        {
+            Light[] lights = FindObjectsByType<Light>(FindObjectsInactive.Exclude);
+
+            for (int i = 0; i < lights.Length; i++)
+            {
+                if (lights[i] != null && lights[i].type == LightType.Directional)
+                {
+                    return lights[i];
+                }
+            }
+
+            return null;
         }
 
         private void ConfigurePostProcessing()
@@ -2251,11 +2419,11 @@ namespace Underwater
                     TerrainModeMaxCameraFarClip);
                 camera.farClipPlane = Mathf.Min(camera.farClipPlane, targetFarClip);
                 camera.fieldOfView = 72f;
-                camera.allowHDR = false;
+                camera.allowHDR = true;
 
                 if (camera.TryGetComponent(out UniversalAdditionalCameraData cameraData))
                 {
-                    cameraData.renderPostProcessing = false;
+                    cameraData.renderPostProcessing = true;
                     cameraData.antialiasing = AntialiasingMode.FastApproximateAntialiasing;
                 }
             }

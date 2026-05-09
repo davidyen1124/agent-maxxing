@@ -27,6 +27,31 @@ namespace Underwater.Tests
             Assert.That(director.Player.SprintEnergyNormalized, Is.GreaterThan(0.99f), "Player should start with full sprint energy.");
             Assert.That(director.ActiveThreadCount, Is.GreaterThanOrEqualTo(0), "Thread count should be readable on boot.");
             Assert.That(director.ArchivedPetCount, Is.GreaterThanOrEqualTo(0), "Archived pet count should be readable on boot.");
+            Assert.That(RenderSettings.sun, Is.Not.Null, "Terrain mode should register a realtime directional sun.");
+            Assert.That(RenderSettings.sun.enabled, Is.True, "The terrain sun should be enabled at runtime.");
+            Assert.That(RenderSettings.sun.type, Is.EqualTo(LightType.Directional), "The terrain sun should render as the URP main light.");
+            Assert.That(RenderSettings.sun.intensity, Is.GreaterThanOrEqualTo(4.5f), "The terrain scene should boot in full daylight.");
+            Assert.That(RenderSettings.ambientSkyColor.maxColorComponent, Is.GreaterThan(0.35f), "Terrain mode needs enough ambient fill for dense vegetation.");
+            Assert.That(RenderSettings.fogDensity, Is.LessThanOrEqualTo(0.001f), "Terrain mode daylight fog should not black out the foreground.");
+
+            FieldInfo timeOfDayField = typeof(UnderwaterGameDirector).GetField("atmosphereTimeOfDay", BindingFlags.NonPublic | BindingFlags.Instance);
+            FieldInfo weatherField = typeof(UnderwaterGameDirector).GetField("atmosphereWeather", BindingFlags.NonPublic | BindingFlags.Instance);
+            FieldInfo intensityField = typeof(UnderwaterGameDirector).GetField("atmosphereIntensity", BindingFlags.NonPublic | BindingFlags.Instance);
+            MethodInfo applyAtmosphereMethod = typeof(UnderwaterGameDirector).GetMethod("ApplyAtmosphereProfile", BindingFlags.NonPublic | BindingFlags.Instance);
+
+            Assert.That(timeOfDayField, Is.Not.Null);
+            Assert.That(weatherField, Is.Not.Null);
+            Assert.That(intensityField, Is.Not.Null);
+            Assert.That(applyAtmosphereMethod, Is.Not.Null);
+
+            timeOfDayField.SetValue(director, "night");
+            weatherField.SetValue(director, "clear");
+            intensityField.SetValue(director, 0.55f);
+            applyAtmosphereMethod.Invoke(director, null);
+
+            Assert.That(RenderSettings.sun.intensity, Is.GreaterThanOrEqualTo(1.2f), "Terrain night should be playable, not pitch black.");
+            Assert.That(RenderSettings.ambientSkyColor.maxColorComponent, Is.GreaterThan(0.3f), "Terrain night needs enough moonlit ambient fill for navigation.");
+            Assert.That(RenderSettings.fogDensity, Is.LessThanOrEqualTo(0.0015f), "Terrain night fog should not hide nearby vegetation.");
         }
 
         [Test]
