@@ -32,10 +32,12 @@ namespace Underwater
 
         private Animator animator;
         private Transform modelRoot;
+        private Light focusLight;
         private Vector3 modelBaseLocalPosition;
         private float targetHeight = 1.2f;
         private float currentMove;
         private float currentRun;
+        private float focusGlow;
         private float bobSeed;
         private string petId = "unknown-pet";
         private string petDisplayName = "Unknown animal";
@@ -60,7 +62,7 @@ namespace Underwater
             return visual;
         }
 
-        public void SetState(CodexPetAnimationState state, Vector3 velocity, bool forceRun)
+        public void SetState(CodexPetAnimationState state, Vector3 velocity, bool forceRun, bool focused = false, bool failedFocus = false)
         {
             if (animator == null)
             {
@@ -82,6 +84,8 @@ namespace Underwater
                 float idleBob = currentMove < 0.05f ? Mathf.Sin(Time.time * 2.1f + bobSeed) * 0.015f : 0f;
                 modelRoot.localPosition = modelBaseLocalPosition + (Vector3.up * (jumpBob + idleBob));
             }
+
+            UpdateFocusGlow(focused, failedFocus);
         }
 
         private void Initialize(GameObject prefab, int animalIndex, float requestedHeight)
@@ -103,6 +107,37 @@ namespace Underwater
             modelBaseLocalPosition = modelRoot.localPosition;
             animator = instance.GetComponentInChildren<Animator>();
             SetRenderersForRuntime(instance);
+            CreateFocusLight();
+        }
+
+        private void CreateFocusLight()
+        {
+            GameObject lightObject = new GameObject("Thread Pet Focus Glow");
+            lightObject.transform.SetParent(transform);
+            lightObject.transform.localPosition = Vector3.up * Mathf.Max(0.35f, targetHeight * 0.58f);
+            lightObject.transform.localRotation = Quaternion.identity;
+
+            focusLight = lightObject.AddComponent<Light>();
+            focusLight.type = LightType.Point;
+            focusLight.range = Mathf.Max(2.4f, targetHeight * 2.8f);
+            focusLight.intensity = 0f;
+            focusLight.color = new Color(0.32f, 0.94f, 1f);
+            focusLight.shadows = LightShadows.None;
+            focusLight.enabled = false;
+        }
+
+        private void UpdateFocusGlow(bool focused, bool failedFocus)
+        {
+            if (focusLight == null)
+            {
+                return;
+            }
+
+            float targetGlow = focused ? 1f : 0f;
+            focusGlow = Mathf.MoveTowards(focusGlow, targetGlow, Time.deltaTime * 3.5f);
+            focusLight.enabled = focusGlow > 0.01f;
+            focusLight.color = failedFocus ? new Color(1f, 0.42f, 0.32f) : new Color(0.32f, 0.94f, 1f);
+            focusLight.intensity = focusGlow * (failedFocus ? 1.35f : 0.95f);
         }
 
         private void StripImportedControlComponents(GameObject instance)
