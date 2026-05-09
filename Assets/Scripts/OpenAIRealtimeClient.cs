@@ -20,6 +20,7 @@ namespace Underwater
         private readonly string apiKey;
         private readonly string model;
         private readonly Func<Dictionary<string, object>, string> worldCommandHandler;
+        private readonly Func<Dictionary<string, object>, string> workThreadCommandHandler;
         private readonly SemaphoreSlim socketLock = new SemaphoreSlim(1, 1);
         private NiaApiClient niaClient;
         private ClientWebSocket answerSocket;
@@ -30,13 +31,15 @@ namespace Underwater
             string apiKey,
             string model,
             NiaApiClient niaClient,
-            Func<Dictionary<string, object>, string> worldCommandHandler)
+            Func<Dictionary<string, object>, string> worldCommandHandler,
+            Func<Dictionary<string, object>, string> workThreadCommandHandler)
         {
             this.apiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim();
             this.model = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
             this.niaClient = niaClient;
             this.worldCommandHandler = worldCommandHandler;
-            Log($"Client configured. model={this.model}, openAiKeySet={!string.IsNullOrWhiteSpace(this.apiKey)}, niaEnabled={CanUseNiaSearch()}, worldCommandsEnabled={CanUseWorldCommands()}");
+            this.workThreadCommandHandler = workThreadCommandHandler;
+            Log($"Client configured. model={this.model}, openAiKeySet={!string.IsNullOrWhiteSpace(this.apiKey)}, niaEnabled={CanUseNiaSearch()}, worldCommandsEnabled={CanUseWorldCommands()}, workThreadCommandsEnabled={CanUseWorkThreadCommands()}");
         }
 
         public bool HasApiKey => !string.IsNullOrWhiteSpace(ReadApiKey());
@@ -458,16 +461,21 @@ namespace Underwater
 
         private string BuildAnswerSessionInstructions()
         {
-            string instructions = "Answer short push-to-talk voice questions for the Unity game Underwater.";
+            string instructions = "Answer short push-to-talk voice questions for this Unity game.";
 
             if (CanUseNiaSearch())
             {
-                instructions += " Route questions about Codex threads, pets, archived pets, nearby/facing things, reef state, local app-server state, or the current Underwater world to the provided game context only. Never call nia_search for those local thread or pet questions. For all other external knowledge, current information, technical docs, code, libraries, research, or anything that benefits from search, call nia_search before answering.";
+                instructions += " Route local observation/status questions about Codex threads, pets, archived pets, nearby/facing things, reef state, local app-server state, or the current game world to the provided game context only. Never call nia_search for those local thread or pet questions. For all other external knowledge, current information, technical docs, code, libraries, research, or anything that benefits from search, call nia_search before answering.";
             }
 
             if (CanUseWorldCommands())
             {
                 instructions += " When the player asks to change the world, weather, fog, rain, storm, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, day, dawn, sunset, or night, call set_world_atmosphere before speaking.";
+            }
+
+            if (CanUseWorkThreadCommands())
+            {
+                instructions += " When the player asks a work question or request specifically about this game/project, collect their exact question and call create_game_thread before speaking.";
             }
 
             return instructions;
@@ -487,6 +495,11 @@ namespace Underwater
                 tools.Add(BuildWorldAtmosphereTool());
             }
 
+            if (CanUseWorkThreadCommands())
+            {
+                tools.Add(BuildWorkThreadTool());
+            }
+
             return tools;
         }
 
@@ -496,7 +509,7 @@ namespace Underwater
             {
                 ["type"] = "function",
                 ["name"] = "nia_search",
-                ["description"] = "Search Nia for external knowledge only. Do not use for local Underwater/Codex app-server questions about threads, pets, archived pets, nearby/facing objects, reef state, or current game context. Use universal for Nia's pre-indexed repositories, docs, and papers; web for current web information; query for configured Nia workspace sources; deep for multi-step research.",
+                ["description"] = "Search Nia for external knowledge only. Do not use for local game/Codex app-server questions about threads, pets, archived pets, nearby/facing objects, reef state, or current game context. Use universal for Nia's pre-indexed repositories, docs, and papers; web for current web information; query for configured Nia workspace sources; deep for multi-step research.",
                 ["parameters"] = new Dictionary<string, object>
                 {
                     ["type"] = "object",
@@ -525,7 +538,7 @@ namespace Underwater
             {
                 ["type"] = "function",
                 ["name"] = "set_world_atmosphere",
-                ["description"] = "Change the visible Underwater Unity world atmosphere. Use this for player requests about weather, rain, storms, fog, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, or time of day.",
+                ["description"] = "Change the visible Unity game world atmosphere. Use this for player requests about weather, rain, storms, fog, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, or time of day.",
                 ["parameters"] = new Dictionary<string, object>
                 {
                     ["type"] = "object",
@@ -554,6 +567,34 @@ namespace Underwater
                             ["description"] = "Optional short atmosphere description, such as calm, spooky, cinematic, cozy, or dramatic."
                         }
                     }
+                }
+            };
+        }
+
+        private static Dictionary<string, object> BuildWorkThreadTool()
+        {
+            return new Dictionary<string, object>
+            {
+                ["type"] = "function",
+                ["name"] = "create_game_thread",
+                ["description"] = "Create a Codex work thread from inside this Unity game for a player question or request specifically about this game/project. Use this instead of answering directly when the user wants game-specific work, investigation, debugging, or implementation.",
+                ["parameters"] = new Dictionary<string, object>
+                {
+                    ["type"] = "object",
+                    ["properties"] = new Dictionary<string, object>
+                    {
+                        ["question"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "string",
+                            ["description"] = "The player's exact spoken question or request about this game/project."
+                        },
+                        ["title"] = new Dictionary<string, object>
+                        {
+                            ["type"] = "string",
+                            ["description"] = "Optional concise thread title based on the player's question."
+                        }
+                    },
+                    ["required"] = new List<object> { "question" }
                 }
             };
         }
@@ -781,6 +822,11 @@ namespace Underwater
                 return ExecuteWorldAtmosphereCommand(functionCall);
             }
 
+            if (string.Equals(functionCall.Name, "create_game_thread", StringComparison.Ordinal))
+            {
+                return ExecuteWorkThreadCommand(functionCall);
+            }
+
             if (!string.Equals(functionCall.Name, "nia_search", StringComparison.Ordinal))
             {
                 string toolName = functionCall == null ? "null" : functionCall.Name;
@@ -830,6 +876,34 @@ namespace Underwater
             {
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
                 LogWarning($"NIA search failed. {Shorten(message, 240)}");
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = Shorten(message, 400)
+                });
+            }
+        }
+
+        private string ExecuteWorkThreadCommand(RealtimeFunctionCall functionCall)
+        {
+            if (!CanUseWorkThreadCommands())
+            {
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = "The work thread command bridge is unavailable."
+                });
+            }
+
+            Dictionary<string, object> arguments = AquariumDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>
+                ?? new Dictionary<string, object>();
+
+            try
+            {
+                string output = workThreadCommandHandler(arguments);
+                return string.IsNullOrWhiteSpace(output) ? "{}" : output;
+            }
+            catch (Exception ex)
+            {
+                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
                 return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
                     ["error"] = Shorten(message, 400)
@@ -903,6 +977,11 @@ namespace Underwater
         private bool CanUseWorldCommands()
         {
             return worldCommandHandler != null;
+        }
+
+        private bool CanUseWorkThreadCommands()
+        {
+            return workThreadCommandHandler != null;
         }
 
         private string CurrentNiaConfigurationKey()

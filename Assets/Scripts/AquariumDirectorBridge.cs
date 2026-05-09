@@ -141,14 +141,14 @@ namespace Underwater
                 throw new InvalidOperationException("Codex app-server is not connected.");
             }
 
-            string safeTitle = string.IsNullOrWhiteSpace(title) ? "Underwater work item" : title.Trim();
+            string safeTitle = string.IsNullOrWhiteSpace(title) ? "Game work item" : title.Trim();
             SetStatus("acting", $"Creating task '{safeTitle}'");
 
             Dictionary<string, object> threadStartParameters = new Dictionary<string, object>
             {
-                ["serviceName"] = "underwater_work_thread",
+                ["serviceName"] = "game_work_thread",
                 ["baseInstructions"] =
-                    "You are a Codex work thread spawned from the Underwater reef. " +
+                    "You are a Codex work thread spawned from the game world. " +
                     "Stay focused on the task that created this thread. " +
                     "Use the current workspace when relevant.",
                 ["threadSource"] = "user",
@@ -292,8 +292,8 @@ namespace Underwater
                 {
                     ["clientInfo"] = new Dictionary<string, object>
                     {
-                        ["name"] = "underwater_unity_client",
-                        ["title"] = "Underwater Unity Client",
+                        ["name"] = "game_unity_client",
+                        ["title"] = "Unity Game Client",
                         ["version"] = "0.1.0"
                     },
                     ["capabilities"] = new Dictionary<string, object>

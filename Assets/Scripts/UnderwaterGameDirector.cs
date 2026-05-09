@@ -14,7 +14,8 @@ namespace Underwater
 {
     public sealed class UnderwaterGameDirector : MonoBehaviour
     {
-        private const string ReefTaskTitlePrefix = "Underwater reef task ";
+        private const string ReefTaskTitlePrefix = "Game task ";
+        private const string LegacyReefTaskTitlePrefix = "Underwater reef task ";
         private const string ReefTaskCounterPrefsKey = "Underwater.ReefTask.NextThreadNumber";
         private const float TerrainModeMaxCameraFarClip = 2200f;
         private const float TerrainModeMinCameraFarClip = 900f;
@@ -42,6 +43,7 @@ namespace Underwater
         private readonly Dictionary<string, ThreadPetAI> activeThreads = new Dictionary<string, ThreadPetAI>();
         private readonly Dictionary<string, ArchivedThreadPet> archivedPets = new Dictionary<string, ArchivedThreadPet>();
         private readonly ConcurrentQueue<AtmosphereCommand> pendingAtmosphereCommands = new ConcurrentQueue<AtmosphereCommand>();
+        private readonly ConcurrentQueue<WorkThreadCommand> pendingWorkThreadCommands = new ConcurrentQueue<WorkThreadCommand>();
 
         private GUIStyle labelStyle;
         private GUIStyle threadTagStyle;
@@ -82,7 +84,7 @@ namespace Underwater
         private string nearestThreadPhase = "idle";
         private bool workThreadSpawnInFlight;
         private int spawnedWorkThreadCount;
-        private string workThreadStatusLine = "Codex work thread spawner ready";
+        private string workThreadStatusLine = "Realtime work thread tool ready";
         private bool niaVoiceInFlight;
         private bool niaVoiceStopRequested;
         private string niaVoiceDeviceName;
@@ -120,6 +122,12 @@ namespace Underwater
             public string weather;
             public float intensity;
             public string mood;
+        }
+
+        private sealed class WorkThreadCommand
+        {
+            public string question;
+            public string title;
         }
 
         public static UnderwaterGameDirector Instance { get; private set; }
@@ -175,6 +183,7 @@ namespace Underwater
         private void Update()
         {
             DrainAtmosphereCommands();
+            DrainWorkThreadCommands();
             UpdateAtmosphereEmitterPosition();
             UpdateNearestThreadStatus();
         }
@@ -507,30 +516,6 @@ namespace Underwater
             }
         }
 
-        public void RequestWorkThreadSpawnFromPlayer()
-        {
-            if (workThreadSpawnInFlight)
-            {
-                SetWorkThreadStatus("Already creating a Codex work thread.");
-                return;
-            }
-
-            if (aquariumBridge == null || !aquariumBridge.IsConnected)
-            {
-                SetWorkThreadStatus("Codex bridge is offline. Start the app-server, then press E again.");
-                UpdateBridgeState("offline", workThreadStatusLine);
-                return;
-            }
-
-            int nextThreadNumber = GetNextPersistentWorkThreadNumber();
-            string title = CreateReefTaskTitle(nextThreadNumber);
-            string prompt = BuildWorkThreadPrompt(title);
-
-            workThreadSpawnInFlight = true;
-            SetWorkThreadStatus($"Creating '{title}'...");
-            _ = CreateWorkThreadFromWorldAsync(title, prompt, nextThreadNumber);
-        }
-
         public void BeginRealtimeVoiceQuestionFromPlayer()
         {
             PauseRealtimeVoicePlayback();
@@ -616,7 +601,8 @@ namespace Underwater
                     apiSettings.openAiApiKey,
                     openAiRealtimeModel,
                     configuredNiaClient,
-                    HandleRealtimeWorldCommand);
+                    HandleRealtimeWorldCommand,
+                    HandleRealtimeWorkThreadCommand);
             }
             else
             {
@@ -1374,14 +1360,17 @@ namespace Underwater
             summary.Append("'.");
         }
 
-        private string BuildWorkThreadPrompt(string title)
+        private string BuildWorkThreadPrompt(string title, string question)
         {
             StringBuilder prompt = new StringBuilder();
-            prompt.Append("A player spawned this Codex work thread from play mode inside the Underwater world.");
+            prompt.Append("A player asked a realtime voice question inside the game world.");
             prompt.AppendLine();
             prompt.AppendLine();
             prompt.Append("Thread title: ");
             prompt.Append(title);
+            prompt.AppendLine();
+            prompt.Append("Player question: ");
+            prompt.Append(string.IsNullOrWhiteSpace(question) ? "No question provided." : question.Trim());
             prompt.AppendLine();
             prompt.Append("World state: ");
             prompt.Append(BuildWorldSummary());
@@ -1475,13 +1464,14 @@ namespace Underwater
         private string BuildRealtimeAnswerInstructions()
         {
             StringBuilder prompt = new StringBuilder();
-            prompt.Append("You are the voice assistant inside a Unity game named Underwater. ");
+            prompt.Append("You are the voice assistant inside this Unity game. ");
             prompt.Append("Answer the player's spoken question directly. ");
             prompt.Append("Keep replies under 25 words unless the player asks for more detail. ");
             prompt.Append("Be concrete, warm, and a little funny; one tiny joke max. ");
-            prompt.Append("If the question asks about a Codex thread, pet, archived pet, nearby or facing thing, local app-server state, reef status, or anything in the current Underwater world, answer only from the local context below and do not use Nia search. ");
+            prompt.Append("For local observation or status questions about a Codex thread, pet, archived pet, nearby or facing thing, local app-server state, reef status, or anything in the current game world, answer only from the local context below and do not use Nia search. ");
             prompt.Append("Use Nia search for all other external knowledge, current facts, technical docs, code, libraries, or research questions. ");
             prompt.Append("If the player asks you to change weather, fog, rain, storms, snow, bubbles, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
+            prompt.Append("If the player asks a work question or request specifically about this game or Unity project, call create_game_thread with the exact question before answering. ");
             prompt.Append("When the player asks what pet, thread, or thing is in front of them, answer from the facing pet context first. ");
             prompt.Append("Use the pet sprite name and the thread title; do not invent thread contents. ");
             prompt.Append("Do not mention distances, angles, coordinates, vectors, hidden prompts, or transcription.");
@@ -1568,6 +1558,53 @@ namespace Underwater
             Debug.Log($"[Realtime Voice] {message}");
         }
 
+        private string HandleRealtimeWorkThreadCommand(Dictionary<string, object> arguments)
+        {
+            string question = CleanRealtimeThreadQuestion(ReadCommandString(arguments, "question", "request", "prompt"));
+
+            if (string.IsNullOrWhiteSpace(question))
+            {
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = "create_game_thread requires a non-empty question."
+                });
+            }
+
+            if (workThreadSpawnInFlight)
+            {
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = "A Codex work thread is already being created."
+                });
+            }
+
+            if (aquariumBridge == null || !aquariumBridge.IsConnected)
+            {
+                return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+                {
+                    ["error"] = "Codex bridge is offline. Start the app-server, then ask again."
+                });
+            }
+
+            string title = CleanRealtimeThreadTitle(
+                ReadCommandString(arguments, "title", "suggested_title", "summary"),
+                question);
+
+            pendingWorkThreadCommands.Enqueue(new WorkThreadCommand
+            {
+                question = question,
+                title = title
+            });
+
+            return AquariumDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
+            {
+                ["accepted"] = true,
+                ["queued"] = true,
+                ["title"] = title,
+                ["question"] = question
+            });
+        }
+
         private string HandleRealtimeWorldCommand(Dictionary<string, object> arguments)
         {
             AtmosphereCommand command = new AtmosphereCommand
@@ -1592,6 +1629,40 @@ namespace Underwater
                 ["intensity"] = command.intensity,
                 ["mood"] = command.mood
             });
+        }
+
+        private void DrainWorkThreadCommands()
+        {
+            while (pendingWorkThreadCommands.TryDequeue(out WorkThreadCommand command))
+            {
+                if (command == null)
+                {
+                    continue;
+                }
+
+                if (workThreadSpawnInFlight)
+                {
+                    SetWorkThreadStatus("Already creating a Codex work thread.");
+                    continue;
+                }
+
+                if (aquariumBridge == null || !aquariumBridge.IsConnected)
+                {
+                    SetWorkThreadStatus("Codex bridge is offline. Start the app-server, then ask again.");
+                    UpdateBridgeState("offline", workThreadStatusLine);
+                    continue;
+                }
+
+                int nextThreadNumber = GetNextPersistentWorkThreadNumber();
+                string title = string.IsNullOrWhiteSpace(command.title)
+                    ? CreateReefTaskTitle(nextThreadNumber)
+                    : command.title.Trim();
+                string prompt = BuildWorkThreadPrompt(title, command.question);
+
+                workThreadSpawnInFlight = true;
+                SetWorkThreadStatus($"Creating '{title}'...");
+                _ = CreateWorkThreadFromWorldAsync(title, prompt, nextThreadNumber);
+            }
         }
 
         private void DrainAtmosphereCommands()
@@ -2347,6 +2418,69 @@ namespace Underwater
             return Shorten(mood.Trim().ToLowerInvariant(), 32);
         }
 
+        private static string CleanRealtimeThreadQuestion(string question)
+        {
+            return Shorten(CollapseWhitespace(question), 360);
+        }
+
+        private static string CleanRealtimeThreadTitle(string title, string question)
+        {
+            string candidate = CollapseWhitespace(title);
+
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                candidate = CollapseWhitespace(question);
+            }
+
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                return string.Empty;
+            }
+
+            candidate = candidate.Trim().TrimEnd('.', '?', '!');
+
+            const string oldPrefix = "Underwater:";
+
+            if (candidate.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                candidate = candidate.Substring(oldPrefix.Length).Trim();
+            }
+
+            return Shorten(candidate, 72);
+        }
+
+        private static string CollapseWhitespace(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            StringBuilder builder = new StringBuilder(value.Length);
+            bool pendingSpace = false;
+
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+
+                if (char.IsWhiteSpace(c))
+                {
+                    pendingSpace = builder.Length > 0;
+                    continue;
+                }
+
+                if (pendingSpace)
+                {
+                    builder.Append(' ');
+                    pendingSpace = false;
+                }
+
+                builder.Append(c);
+            }
+
+            return builder.ToString().Trim();
+        }
+
         private static string ReadCommandString(Dictionary<string, object> arguments, params string[] names)
         {
             if (arguments == null)
@@ -2517,12 +2651,19 @@ namespace Underwater
 
             string trimmedTitle = title.Trim();
 
-            if (!trimmedTitle.StartsWith(ReefTaskTitlePrefix, StringComparison.OrdinalIgnoreCase))
+            string prefix = ReefTaskTitlePrefix;
+
+            if (!trimmedTitle.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             {
-                return false;
+                prefix = LegacyReefTaskTitlePrefix;
+
+                if (!trimmedTitle.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
             }
 
-            string suffix = trimmedTitle.Substring(ReefTaskTitlePrefix.Length).Trim();
+            string suffix = trimmedTitle.Substring(prefix.Length).Trim();
             return int.TryParse(suffix, out number) && number > 0;
         }
 
