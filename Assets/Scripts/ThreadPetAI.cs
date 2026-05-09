@@ -33,6 +33,7 @@ namespace Underwater
         private string statusMessage = "Idle";
         private string phase = "idle";
         private float ageMinutes;
+        private CodexPetDefinition petDefinition;
 
         public string ThreadId => threadId;
 
@@ -45,6 +46,10 @@ namespace Underwater
         public string Phase => phase;
 
         public Vector3 Velocity => velocity;
+
+        public string PetId => petDefinition != null && !string.IsNullOrWhiteSpace(petDefinition.Id) ? petDefinition.Id : "unknown-pet";
+
+        public string PetDisplayName => petDefinition != null && !string.IsNullOrWhiteSpace(petDefinition.DisplayName) ? petDefinition.DisplayName : PetId;
 
         private enum ChaosMoveMode
         {
@@ -76,6 +81,8 @@ namespace Underwater
                 Debug.LogWarning("[ThreadPetAI] No Codex pet atlas is available; thread pet will not be created.");
                 return false;
             }
+
+            petDefinition = pet;
 
             Transform modelRoot = new GameObject("Model").transform;
             modelRoot.SetParent(transform);

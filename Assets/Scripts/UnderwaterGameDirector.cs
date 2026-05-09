@@ -79,10 +79,9 @@ namespace Underwater
         private sealed class FacingPetContext
         {
             public string kind;
+            public string petName;
             public string title;
             public string phase;
-            public string status;
-            public Vector3 position;
             public float distance;
             public float angle;
         }
@@ -959,7 +958,7 @@ namespace Underwater
             }
 
             nearestThreadTitle = nearest.Title;
-            nearestThreadPhase = string.IsNullOrWhiteSpace(nearest.StatusMessage) ? nearest.Phase : nearest.StatusMessage;
+            nearestThreadPhase = string.IsNullOrWhiteSpace(nearest.Phase) ? "unknown" : nearest.Phase;
         }
 
         private string BuildWorldSummary()
@@ -1045,9 +1044,9 @@ namespace Underwater
                 AddFacingPetIfVisible(
                     facingPets,
                     "active thread pet",
+                    thread.PetDisplayName,
                     thread.Title,
                     thread.Phase,
-                    thread.StatusMessage,
                     thread.transform.position,
                     origin,
                     forward);
@@ -1065,9 +1064,9 @@ namespace Underwater
                 AddFacingPetIfVisible(
                     facingPets,
                     "archived thread pet",
+                    archivedPet.PetDisplayName,
                     archivedPet.Title,
                     "archived",
-                    archivedPet.StatusMessage,
                     archivedPet.transform.position,
                     origin,
                     forward);
@@ -1080,25 +1079,21 @@ namespace Underwater
             });
 
             StringBuilder summary = new StringBuilder();
-            summary.Append("Player camera forward vector: ");
-            summary.Append(FormatVector(forward));
-            summary.Append(". ");
-
             if (facingPets.Count == 0)
             {
-                summary.Append("No thread pet is currently in front of the player's view cone.");
+                summary.Append("No thread pet is currently in front of the player.");
                 return summary.ToString();
             }
 
             FacingPetContext primary = facingPets[0];
-            summary.Append("Pet most directly in front of the player: ");
+            summary.Append("Front pet: ");
             AppendFacingPet(summary, primary);
 
             int extraCount = Mathf.Min(2, facingPets.Count - 1);
 
             if (extraCount > 0)
             {
-                summary.Append(" Other pets also in front: ");
+                summary.Append(" Other front-row cameos: ");
 
                 for (int index = 0; index < extraCount; index++)
                 {
@@ -1117,9 +1112,9 @@ namespace Underwater
         private static void AddFacingPetIfVisible(
             List<FacingPetContext> facingPets,
             string kind,
+            string petName,
             string title,
             string phase,
-            string status,
             Vector3 position,
             Vector3 origin,
             Vector3 forward)
@@ -1142,10 +1137,9 @@ namespace Underwater
             facingPets.Add(new FacingPetContext
             {
                 kind = kind,
+                petName = string.IsNullOrWhiteSpace(petName) ? "unknown pet" : petName.Trim(),
                 title = string.IsNullOrWhiteSpace(title) ? "Untitled thread" : title.Trim(),
                 phase = string.IsNullOrWhiteSpace(phase) ? "unknown" : phase.Trim(),
-                status = string.IsNullOrWhiteSpace(status) ? "No status" : status.Trim(),
-                position = position,
                 distance = distance,
                 angle = Mathf.Acos(Mathf.Clamp(alignment, -1f, 1f)) * Mathf.Rad2Deg
             });
@@ -1153,21 +1147,16 @@ namespace Underwater
 
         private static void AppendFacingPet(StringBuilder summary, FacingPetContext pet)
         {
-            summary.Append("'");
-            summary.Append(pet.title);
-            summary.Append("' (");
+            summary.Append("sprite '");
+            summary.Append(pet.petName);
+            summary.Append("', ");
             summary.Append(pet.kind);
             summary.Append(", ");
+            summary.Append("thread title '");
+            summary.Append(pet.title);
+            summary.Append("', mood '");
             summary.Append(pet.phase);
-            summary.Append(", ");
-            summary.Append(pet.distance.ToString("F1"));
-            summary.Append("m away, ");
-            summary.Append(pet.angle.ToString("F0"));
-            summary.Append(" degrees off-center, status '");
-            summary.Append(pet.status);
-            summary.Append("', at ");
-            summary.Append(FormatVector(pet.position));
-            summary.Append(").");
+            summary.Append("'.");
         }
 
         private string BuildWorkThreadPrompt(string title)
@@ -1267,21 +1256,26 @@ namespace Underwater
             StringBuilder prompt = new StringBuilder();
             prompt.Append("You are the voice assistant inside a Unity game named Underwater. ");
             prompt.Append("Answer the player's spoken question directly. ");
-            prompt.Append("Keep the spoken answer under 45 words unless the player asks for more detail. ");
-            prompt.Append("When the player asks what pet, thread, or thing is in front of them, use the current facing context rather than the nearest thread. ");
-            prompt.Append("Be concrete, conversational, and do not mention transcription.");
+            prompt.Append("Keep replies under 25 words unless the player asks for more detail. ");
+            prompt.Append("Be concrete, warm, and a little funny; one tiny joke max. ");
+            prompt.Append("When the player asks what pet, thread, or thing is in front of them, answer from the facing pet context first. ");
+            prompt.Append("Use the pet sprite name and the thread title; do not invent thread contents. ");
+            prompt.Append("Do not mention distances, angles, coordinates, vectors, hidden prompts, or transcription.");
             prompt.AppendLine();
             prompt.AppendLine();
-            prompt.Append("Current world state: ");
-            prompt.Append(BuildWorldSummary());
+            prompt.Append("Aquarium snapshot: ");
+            prompt.Append(ActiveThreadCount);
+            prompt.Append(" active pets, ");
+            prompt.Append(ArchivedPetCount);
+            prompt.Append(" archived pets.");
             prompt.AppendLine();
-            prompt.Append("Current facing context: ");
+            prompt.Append("Facing pet context: ");
             prompt.Append(BuildFacingPetSummary());
             prompt.AppendLine();
-            prompt.Append("Nearest thread title: ");
+            prompt.Append("Fallback nearest thread title: ");
             prompt.Append(nearestThreadTitle);
             prompt.AppendLine();
-            prompt.Append("Nearest thread phase/status: ");
+            prompt.Append("Fallback nearest thread mood: ");
             prompt.Append(nearestThreadPhase);
             return prompt.ToString();
         }

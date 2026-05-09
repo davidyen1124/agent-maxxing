@@ -16,12 +16,17 @@ namespace Underwater
         private string threadId = string.Empty;
         private string title = "Untitled thread";
         private string statusMessage = "Archived";
+        private CodexPetDefinition petDefinition;
 
         public string ThreadId => threadId;
 
         public string Title => title;
 
         public string StatusMessage => statusMessage;
+
+        public string PetId => petDefinition != null && !string.IsNullOrWhiteSpace(petDefinition.Id) ? petDefinition.Id : "unknown-pet";
+
+        public string PetDisplayName => petDefinition != null && !string.IsNullOrWhiteSpace(petDefinition.DisplayName) ? petDefinition.DisplayName : PetId;
 
         public bool Initialize(UnderwaterGameDirector director, AquariumArchivedPetSnapshot snapshot)
         {
@@ -37,6 +42,8 @@ namespace Underwater
                 Debug.LogWarning("[ArchivedThreadPet] No Codex pet atlas is available; archived pet will not be created.");
                 return false;
             }
+
+            petDefinition = pet;
 
             Vector3 position = snapshot != null && snapshot.position != null
                 ? snapshot.position.ToVector3()
