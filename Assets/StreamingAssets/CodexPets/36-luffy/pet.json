@@ -1,0 +1,8 @@
+{
+  "id": "luffy",
+  "displayName": "Luffy",
+  "description": "A tiny straw-hat pirate companion with cheerful rubbery energy.",
+  "kind": "person",
+  "source": "codex-pets.net popular",
+  "spritesheetPath": "spritesheet.webp"
+}

@@ -12,14 +12,14 @@ namespace Underwater
         public AquariumDirectorMetrics metrics;
         public AquariumPlayerSnapshot player;
         public AquariumThreadSnapshot[] threads;
-        public AquariumArchivedRollSnapshot[] archivedRolls;
+        public AquariumArchivedPetSnapshot[] archivedPets;
     }
 
     [Serializable]
     public sealed class AquariumDirectorMetrics
     {
         public int activeThreads;
-        public int archivedRolls;
+        public int archivedPets;
         public string bridgeState;
     }
 
@@ -37,6 +37,7 @@ namespace Underwater
     {
         public string id;
         public string title;
+        public string statusMessage;
         public string phase;
         public string source;
         public float ageMinutes;
@@ -45,10 +46,11 @@ namespace Underwater
     }
 
     [Serializable]
-    public sealed class AquariumArchivedRollSnapshot
+    public sealed class AquariumArchivedPetSnapshot
     {
         public string id;
         public string title;
+        public string statusMessage;
         public SerializableVector3 position;
     }
 

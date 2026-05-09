@@ -10,20 +10,16 @@ namespace Underwater
 {
     public sealed class UnderwaterGameDirector : MonoBehaviour
     {
-        private readonly Dictionary<string, ThreadLobsterAI> activeThreads = new Dictionary<string, ThreadLobsterAI>();
-        private readonly Dictionary<string, ArchivedThreadRoll> archivedRolls = new Dictionary<string, ArchivedThreadRoll>();
+        private readonly Dictionary<string, ThreadPetAI> activeThreads = new Dictionary<string, ThreadPetAI>();
+        private readonly Dictionary<string, ArchivedThreadPet> archivedPets = new Dictionary<string, ArchivedThreadPet>();
 
         private GUIStyle labelStyle;
-        private GUIStyle headlineStyle;
-        private GUIStyle mutedStyle;
-        private GUIStyle panelStyle;
         private GUIStyle threadTagStyle;
+        private GUIStyle speechBubbleStyle;
+        private GUIStyle speechBubbleShadowStyle;
 
         private Material reefMaterial;
         private Material kelpMaterial;
-        private Material threadBodyMaterial;
-        private Material threadAccentMaterial;
-        private Material rollMaterial;
         private Material surfaceMaterial;
         private AquariumDirectorBridge aquariumBridge;
         private int snapshotSequence;
@@ -42,7 +38,7 @@ namespace Underwater
 
         public int ActiveThreadCount => activeThreads.Count;
 
-        public int ArchivedRollCount => archivedRolls.Count;
+        public int ArchivedPetCount => archivedPets.Count;
 
         private void Awake()
         {
@@ -87,40 +83,10 @@ namespace Underwater
             }
 
             EnsureGuiStyles();
-
-            const float panelPaddingX = 14f;
-            const float panelPaddingY = 10f;
-            const float panelWidth = 330f;
-            string statusText = Shorten(directorStatusLine, 52);
-            float contentWidth = panelWidth - (panelPaddingX * 2f);
-            float contentHeight = CalculateHudContentHeight(contentWidth, statusText);
-            Rect panel = new Rect(16f, 16f, panelWidth, contentHeight + (panelPaddingY * 2f));
-            Rect content = new Rect(panel.x + panelPaddingX, panel.y + panelPaddingY, contentWidth, contentHeight);
-            GUI.color = new Color(0.03f, 0.08f, 0.12f, 0.9f);
-            GUI.Box(panel, GUIContent.none, panelStyle);
-            GUI.color = Color.white;
-
-            GUILayout.BeginArea(content);
-            GUILayout.Label("Thread Reef", headlineStyle);
-            GUILayout.Space(4f);
-            GUILayout.Label("Boost", labelStyle);
-            DrawBar(Player.BoostNormalized, new Color(0.3f, 0.82f, 0.96f));
-            GUILayout.Space(4f);
-            GUILayout.Label($"Active threads: {ActiveThreadCount}", labelStyle);
-            GUILayout.Label($"Archived rolls: {ArchivedRollCount}", labelStyle);
-            GUILayout.Label(statusText, mutedStyle);
-            GUILayout.EndArea();
-
             DrawThreadNameTags();
-
-            if (!Player.HasPointerLock)
-            {
-                Rect prompt = new Rect(Screen.width * 0.5f - 170f, Screen.height - 84f, 340f, 40f);
-                GUI.Box(prompt, "Click in the window to dive back in.");
-            }
         }
 
-        public void SyncThreadWorld(IReadOnlyList<AquariumThreadSnapshot> threads, IReadOnlyList<AquariumArchivedRollSnapshot> rolls, string detail)
+        public void SyncThreadWorld(IReadOnlyList<AquariumThreadSnapshot> threads, IReadOnlyList<AquariumArchivedPetSnapshot> syncedArchivedPets, string detail)
         {
             HashSet<string> liveIds = new HashSet<string>();
 
@@ -137,23 +103,30 @@ namespace Underwater
 
                     liveIds.Add(snapshot.id);
 
-                    if (activeThreads.TryGetValue(snapshot.id, out ThreadLobsterAI existing))
+                    if (activeThreads.TryGetValue(snapshot.id, out ThreadPetAI existing))
                     {
                         existing.ApplySnapshot(snapshot);
                     }
                     else
                     {
                         GameObject threadObject = new GameObject($"Thread {snapshot.id}");
-                        ThreadLobsterAI threadLobster = threadObject.AddComponent<ThreadLobsterAI>();
-                        threadLobster.Initialize(this, snapshot, threadBodyMaterial, threadAccentMaterial);
-                        activeThreads[snapshot.id] = threadLobster;
+                        ThreadPetAI threadPet = threadObject.AddComponent<ThreadPetAI>();
+
+                        if (threadPet.Initialize(this, snapshot))
+                        {
+                            activeThreads[snapshot.id] = threadPet;
+                        }
+                        else
+                        {
+                            Destroy(threadObject);
+                        }
                     }
                 }
             }
 
             List<string> staleActiveIds = new List<string>();
 
-            foreach (KeyValuePair<string, ThreadLobsterAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
             {
                 if (!liveIds.Contains(pair.Key))
                 {
@@ -165,11 +138,11 @@ namespace Underwater
             {
                 string id = staleActiveIds[i];
 
-                if (activeThreads.TryGetValue(id, out ThreadLobsterAI creature))
+                if (activeThreads.TryGetValue(id, out ThreadPetAI threadPet))
                 {
-                    if (creature != null)
+                    if (threadPet != null)
                     {
-                        Destroy(creature.gameObject);
+                        Destroy(threadPet.gameObject);
                     }
 
                     activeThreads.Remove(id);
@@ -178,11 +151,11 @@ namespace Underwater
 
             HashSet<string> archivedIds = new HashSet<string>();
 
-            if (rolls != null)
+            if (syncedArchivedPets != null)
             {
-                for (int i = 0; i < rolls.Count; i++)
+                for (int i = 0; i < syncedArchivedPets.Count; i++)
                 {
-                    AquariumArchivedRollSnapshot snapshot = rolls[i];
+                    AquariumArchivedPetSnapshot snapshot = syncedArchivedPets[i];
 
                     if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.id))
                     {
@@ -191,21 +164,28 @@ namespace Underwater
 
                     archivedIds.Add(snapshot.id);
 
-                    if (archivedRolls.ContainsKey(snapshot.id))
+                    if (archivedPets.ContainsKey(snapshot.id))
                     {
                         continue;
                     }
 
-                    GameObject rollObject = new GameObject($"Lobster Roll {snapshot.id}");
-                    ArchivedThreadRoll roll = rollObject.AddComponent<ArchivedThreadRoll>();
-                    roll.Initialize(this, snapshot, rollMaterial);
-                    archivedRolls[snapshot.id] = roll;
+                    GameObject archivedPetObject = new GameObject($"Archived Pet {snapshot.id}");
+                    ArchivedThreadPet archivedPet = archivedPetObject.AddComponent<ArchivedThreadPet>();
+
+                    if (archivedPet.Initialize(this, snapshot))
+                    {
+                        archivedPets[snapshot.id] = archivedPet;
+                    }
+                    else
+                    {
+                        Destroy(archivedPetObject);
+                    }
                 }
             }
 
             List<string> staleArchivedIds = new List<string>();
 
-            foreach (KeyValuePair<string, ArchivedThreadRoll> pair in archivedRolls)
+            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
             {
                 if (!archivedIds.Contains(pair.Key))
                 {
@@ -217,19 +197,19 @@ namespace Underwater
             {
                 string id = staleArchivedIds[i];
 
-                if (archivedRolls.TryGetValue(id, out ArchivedThreadRoll roll))
+                if (archivedPets.TryGetValue(id, out ArchivedThreadPet archivedPet))
                 {
-                    if (roll != null)
+                    if (archivedPet != null)
                     {
-                        Destroy(roll.gameObject);
+                        Destroy(archivedPet.gameObject);
                     }
 
-                    archivedRolls.Remove(id);
+                    archivedPets.Remove(id);
                 }
             }
 
             directorStatusLine = string.IsNullOrWhiteSpace(detail)
-                ? $"Synced {ActiveThreadCount} swimming threads and {ArchivedRollCount} rolls."
+                ? $"Synced {ActiveThreadCount} swimming threads and {ArchivedPetCount} archived pets."
                 : detail;
             UpdateNearestThreadStatus();
         }
@@ -248,7 +228,7 @@ namespace Underwater
         {
             List<AquariumThreadSnapshot> threadSnapshots = new List<AquariumThreadSnapshot>(activeThreads.Count);
 
-            foreach (KeyValuePair<string, ThreadLobsterAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
             {
                 if (pair.Value != null)
                 {
@@ -256,13 +236,13 @@ namespace Underwater
                 }
             }
 
-            List<AquariumArchivedRollSnapshot> rollSnapshots = new List<AquariumArchivedRollSnapshot>(archivedRolls.Count);
+            List<AquariumArchivedPetSnapshot> archivedPetSnapshots = new List<AquariumArchivedPetSnapshot>(archivedPets.Count);
 
-            foreach (KeyValuePair<string, ArchivedThreadRoll> pair in archivedRolls)
+            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
             {
                 if (pair.Value != null)
                 {
-                    rollSnapshots.Add(pair.Value.CreateSnapshot());
+                    archivedPetSnapshots.Add(pair.Value.CreateSnapshot());
                 }
             }
 
@@ -274,7 +254,7 @@ namespace Underwater
                 metrics = new AquariumDirectorMetrics
                 {
                     activeThreads = ActiveThreadCount,
-                    archivedRolls = ArchivedRollCount,
+                    archivedPets = ArchivedPetCount,
                     bridgeState = bridgeState
                 },
                 player = new AquariumPlayerSnapshot
@@ -285,7 +265,7 @@ namespace Underwater
                     hasPointerLock = Player != null && Player.HasPointerLock
                 },
                 threads = threadSnapshots.ToArray(),
-                archivedRolls = rollSnapshots.ToArray()
+                archivedPets = archivedPetSnapshots.ToArray()
             };
         }
 
@@ -338,66 +318,79 @@ namespace Underwater
                 fontSize = 13
             };
 
-            panelStyle = new GUIStyle(GUI.skin.box)
-            {
-                padding = new RectOffset(14, 14, 10, 10)
-            };
-
-            panelStyle.normal.background = Texture2D.whiteTexture;
-            panelStyle.normal.textColor = Color.white;
-
-            mutedStyle = new GUIStyle(labelStyle)
-            {
-                normal = { textColor = new Color(0.76f, 0.9f, 0.95f) },
-                fontSize = 12
-            };
-
-            headlineStyle = new GUIStyle(labelStyle)
-            {
-                fontSize = 18,
-                fontStyle = FontStyle.Bold
-            };
-
             threadTagStyle = new GUIStyle(labelStyle)
             {
                 alignment = TextAnchor.MiddleCenter,
-                fontSize = 11,
+                fontSize = 18,
+                fontStyle = FontStyle.Bold,
                 clipping = TextClipping.Clip,
-                padding = new RectOffset(8, 8, 4, 4)
+                wordWrap = true,
+                padding = new RectOffset(14, 14, 8, 8),
+                normal = { textColor = new Color(0.82f, 0.98f, 1f) }
             };
+
+            speechBubbleStyle = new GUIStyle(GUI.skin.box)
+            {
+                padding = new RectOffset(16, 16, 9, 9),
+                border = new RectOffset(14, 14, 14, 14)
+            };
+            speechBubbleStyle.normal.background = CreateRoundedRectTexture(
+                40,
+                40,
+                14f,
+                new Color(0.02f, 0.14f, 0.18f, 0.86f),
+                new Color(0.27f, 0.84f, 0.9f, 0.78f),
+                2f);
+
+            speechBubbleShadowStyle = new GUIStyle(GUI.skin.box)
+            {
+                border = new RectOffset(16, 16, 16, 16)
+            };
+            speechBubbleShadowStyle.normal.background = CreateRoundedRectTexture(
+                44,
+                44,
+                16f,
+                new Color(0f, 0.02f, 0.03f, 0.38f),
+                new Color(0f, 0.02f, 0.03f, 0f),
+                0f);
         }
 
-        private void DrawBar(float normalizedValue, Color fillColor)
+        private static Texture2D CreateRoundedRectTexture(int width, int height, float radius, Color fillColor, Color borderColor, float borderWidth)
         {
-            Rect rowRect = GUILayoutUtility.GetRect(220f, 18f, GUILayout.ExpandWidth(true));
-            Rect barRect = new Rect(rowRect.x, rowRect.y + 3f, rowRect.width, 12f);
-            GUI.color = new Color(0.06f, 0.12f, 0.16f, 0.9f);
-            GUI.DrawTexture(barRect, Texture2D.whiteTexture);
+            Texture2D texture = new Texture2D(width, height, TextureFormat.RGBA32, false)
+            {
+                name = "Aquarium Speech Bubble"
+            };
+            Color clear = new Color(1f, 1f, 1f, 0f);
+            float maxX = width - 1f;
+            float maxY = height - 1f;
 
-            Rect fillRect = new Rect(barRect.x + 1f, barRect.y + 1f, (barRect.width - 2f) * Mathf.Clamp01(normalizedValue), barRect.height - 2f);
-            GUI.color = fillColor;
-            GUI.DrawTexture(fillRect, Texture2D.whiteTexture);
-            GUI.color = Color.white;
-        }
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    float distanceFromEdge = Mathf.Min(Mathf.Min(x, maxX - x), Mathf.Min(y, maxY - y));
+                    float cornerX = x < radius ? radius : maxX - x < radius ? maxX - radius : x;
+                    float cornerY = y < radius ? radius : maxY - y < radius ? maxY - radius : y;
+                    float cornerDistance = Vector2.Distance(new Vector2(x, y), new Vector2(cornerX, cornerY));
 
-        private float CalculateHudContentHeight(float contentWidth, string statusText)
-        {
-            return MeasureGuiTextHeight(headlineStyle, "Thread Reef", contentWidth)
-                + 4f
-                + MeasureGuiTextHeight(labelStyle, "Boost", contentWidth)
-                + 18f
-                + 4f
-                + MeasureGuiTextHeight(labelStyle, $"Active threads: {ActiveThreadCount}", contentWidth)
-                + MeasureGuiTextHeight(labelStyle, $"Archived rolls: {ArchivedRollCount}", contentWidth)
-                + MeasureGuiTextHeight(mutedStyle, statusText, contentWidth)
-                + 2f;
-        }
+                    if (cornerDistance > radius)
+                    {
+                        texture.SetPixel(x, y, clear);
+                    }
+                    else if (borderWidth > 0f && (distanceFromEdge < borderWidth || cornerDistance > radius - borderWidth))
+                    {
+                        texture.SetPixel(x, y, borderColor);
+                    }
+                    else
+                    {
+                        texture.SetPixel(x, y, fillColor);
+                    }
+                }
+            }
 
-        private static float MeasureGuiTextHeight(GUIStyle style, string text, float width)
-        {
-            float calculatedHeight = style.CalcHeight(new GUIContent(text), width);
-            float fallbackHeight = style.lineHeight > 0f ? style.lineHeight : style.fontSize + 4f;
-            return Mathf.Max(calculatedHeight, fallbackHeight);
+            texture.Apply();
+            return texture;
         }
 
         private static string Shorten(string text, int maxLength)
@@ -426,36 +419,36 @@ namespace Underwater
                 return;
             }
 
-            foreach (KeyValuePair<string, ThreadLobsterAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
             {
-                ThreadLobsterAI thread = pair.Value;
+                ThreadPetAI thread = pair.Value;
 
                 if (thread == null)
                 {
                     continue;
                 }
 
-                string title = Shorten(thread.Title, 24);
-                DrawNameTag(camera, title, thread.transform.position + Vector3.up * 1.35f, new Color(0.03f, 0.08f, 0.12f, 0.88f));
+                string message = Shorten(thread.StatusMessage, 64);
+                DrawNameTag(camera, message, thread.transform.position + Vector3.up * 1.55f);
             }
 
-            foreach (KeyValuePair<string, ArchivedThreadRoll> pair in archivedRolls)
+            foreach (KeyValuePair<string, ArchivedThreadPet> pair in archivedPets)
             {
-                ArchivedThreadRoll roll = pair.Value;
+                ArchivedThreadPet archivedPet = pair.Value;
 
-                if (roll == null)
+                if (archivedPet == null)
                 {
                     continue;
                 }
 
-                string title = Shorten(roll.Title, 24);
-                DrawNameTag(camera, title, roll.transform.position + Vector3.up * 0.9f, new Color(0.11f, 0.08f, 0.04f, 0.88f));
+                string message = Shorten(archivedPet.StatusMessage, 64);
+                DrawNameTag(camera, message, archivedPet.transform.position + Vector3.up * 1.05f);
             }
         }
 
-        private void DrawNameTag(Camera camera, string title, Vector3 worldAnchor, Color backgroundColor)
+        private void DrawNameTag(Camera camera, string message, Vector3 worldAnchor)
         {
-            if (camera == null || string.IsNullOrWhiteSpace(title))
+            if (camera == null || string.IsNullOrWhiteSpace(message))
             {
                 return;
             }
@@ -467,17 +460,19 @@ namespace Underwater
                 return;
             }
 
-            Vector2 size = threadTagStyle.CalcSize(new GUIContent(title));
-            float width = Mathf.Clamp(size.x + 10f, 88f, 180f);
-            float height = 22f;
+            GUIContent content = new GUIContent(message);
+            float width = Mathf.Clamp(threadTagStyle.CalcSize(content).x + 32f, 150f, 300f);
+            float textHeight = threadTagStyle.CalcHeight(content, width - 28f);
+            float height = Mathf.Clamp(textHeight + 18f, 42f, 92f);
             float x = Mathf.Clamp(screenPoint.x - (width * 0.5f), 6f, Screen.width - width - 6f);
-            float y = Mathf.Clamp(Screen.height - screenPoint.y - 12f, 6f, Screen.height - height - 6f);
+            float y = Mathf.Clamp(Screen.height - screenPoint.y - height - 18f, 6f, Screen.height - height - 6f);
             Rect tagRect = new Rect(x, y, width, height);
+            Rect shadowRect = new Rect(tagRect.x + 2f, tagRect.y + 3f, tagRect.width, tagRect.height);
 
-            GUI.color = backgroundColor;
-            GUI.Box(tagRect, GUIContent.none, panelStyle);
             GUI.color = Color.white;
-            GUI.Label(tagRect, title, threadTagStyle);
+            GUI.Box(shadowRect, GUIContent.none, speechBubbleShadowStyle);
+            GUI.Box(tagRect, GUIContent.none, speechBubbleStyle);
+            GUI.Label(tagRect, content, threadTagStyle);
         }
 
         private void UpdateNearestThreadStatus()
@@ -489,13 +484,13 @@ namespace Underwater
                 return;
             }
 
-            ThreadLobsterAI nearest = null;
+            ThreadPetAI nearest = null;
             float nearestDistance = float.MaxValue;
             Vector3 playerPosition = Player.transform.position;
 
-            foreach (KeyValuePair<string, ThreadLobsterAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
             {
-                ThreadLobsterAI thread = pair.Value;
+                ThreadPetAI thread = pair.Value;
 
                 if (thread == null)
                 {
@@ -519,7 +514,7 @@ namespace Underwater
             }
 
             nearestThreadTitle = nearest.Title;
-            nearestThreadPhase = nearest.Phase;
+            nearestThreadPhase = string.IsNullOrWhiteSpace(nearest.StatusMessage) ? nearest.Phase : nearest.StatusMessage;
         }
 
         private string BuildWorldSummary()
@@ -530,16 +525,16 @@ namespace Underwater
             summary.Append(FormatVector(playerPosition));
             summary.Append(". ");
             summary.Append(ActiveThreadCount);
-            summary.Append(" active thread creatures swimming, ");
-            summary.Append(ArchivedRollCount);
-            summary.Append(" archived lobster rolls resting on the seafloor. ");
+            summary.Append(" active thread pets swimming, ");
+            summary.Append(ArchivedPetCount);
+            summary.Append(" archived pet companions resting on the seafloor. ");
 
-            ThreadLobsterAI nearest = null;
+            ThreadPetAI nearest = null;
             float nearestDistance = float.MaxValue;
 
-            foreach (KeyValuePair<string, ThreadLobsterAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ThreadPetAI> pair in activeThreads)
             {
-                ThreadLobsterAI thread = pair.Value;
+                ThreadPetAI thread = pair.Value;
 
                 if (thread == null)
                 {
@@ -561,6 +556,9 @@ namespace Underwater
                 summary.Append(nearest.Title);
                 summary.Append("' in phase ");
                 summary.Append(nearest.Phase);
+                summary.Append(" showing '");
+                summary.Append(nearest.StatusMessage);
+                summary.Append("'");
                 summary.Append(" at ");
                 summary.Append(FormatVector(nearest.transform.position));
                 summary.Append(". ");
@@ -597,7 +595,7 @@ namespace Underwater
             RenderSettings.ambientGroundColor = new Color(0.02f, 0.05f, 0.06f);
             RenderSettings.reflectionIntensity = 0.35f;
 
-            Light sun = FindFirstObjectByType<Light>();
+            Light sun = FindAnyObjectByType<Light>();
 
             if (sun == null)
             {
@@ -613,7 +611,7 @@ namespace Underwater
 
         private void ConfigurePostProcessing()
         {
-            Volume volume = FindFirstObjectByType<Volume>();
+            Volume volume = FindAnyObjectByType<Volume>();
 
             if (volume == null)
             {
@@ -701,10 +699,6 @@ namespace Underwater
                 CreateKelpCluster(arenaRoot.transform, i);
             }
 
-            for (int i = 0; i < 6; i++)
-            {
-                CreateBubbleColumn(arenaRoot.transform, i);
-            }
         }
 
         private void CreatePlayer()
@@ -789,66 +783,6 @@ namespace Underwater
             }
         }
 
-        private void CreateBubbleColumn(Transform parent, int index)
-        {
-            GameObject bubbleColumn = new GameObject($"Bubble Column {index + 1}");
-            bubbleColumn.transform.SetParent(parent);
-            bubbleColumn.transform.position = GetRandomSeafloorPoint(8f);
-            bubbleColumn.transform.position = new Vector3(
-                bubbleColumn.transform.position.x,
-                SeaFloorY + 0.2f,
-                bubbleColumn.transform.position.z);
-
-            ParticleSystem particleSystem = bubbleColumn.AddComponent<ParticleSystem>();
-            particleSystem.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
-            ParticleSystem.MainModule main = particleSystem.main;
-            main.playOnAwake = false;
-            main.loop = true;
-            main.duration = 6f;
-            main.startLifetime = 5.5f;
-            main.startSpeed = new ParticleSystem.MinMaxCurve(0.7f, 1.4f);
-            main.startSize = new ParticleSystem.MinMaxCurve(0.06f, 0.14f);
-            main.maxParticles = 140;
-            main.simulationSpace = ParticleSystemSimulationSpace.World;
-            main.startColor = new Color(0.74f, 0.96f, 1f, 0.45f);
-
-            ParticleSystem.EmissionModule emission = particleSystem.emission;
-            emission.rateOverTime = 12f;
-
-            ParticleSystem.ShapeModule shape = particleSystem.shape;
-            shape.enabled = true;
-            shape.shapeType = ParticleSystemShapeType.Circle;
-            shape.radius = 0.35f;
-
-            ParticleSystem.VelocityOverLifetimeModule velocityOverLifetime = particleSystem.velocityOverLifetime;
-            velocityOverLifetime.enabled = true;
-            velocityOverLifetime.x = new ParticleSystem.MinMaxCurve(-0.16f, 0.16f);
-            velocityOverLifetime.y = new ParticleSystem.MinMaxCurve(0f, 0f);
-            velocityOverLifetime.z = new ParticleSystem.MinMaxCurve(-0.16f, 0.16f);
-
-            ParticleSystem.ColorOverLifetimeModule colorOverLifetime = particleSystem.colorOverLifetime;
-            colorOverLifetime.enabled = true;
-            Gradient gradient = new Gradient();
-            gradient.SetKeys(
-                new[]
-                {
-                    new GradientColorKey(new Color(0.7f, 0.92f, 1f), 0f),
-                    new GradientColorKey(new Color(0.96f, 1f, 1f), 1f)
-                },
-                new[]
-                {
-                    new GradientAlphaKey(0f, 0f),
-                    new GradientAlphaKey(0.5f, 0.15f),
-                    new GradientAlphaKey(0f, 1f)
-                });
-            colorOverLifetime.color = new ParticleSystem.MinMaxGradient(gradient);
-
-            ParticleSystemRenderer renderer = particleSystem.GetComponent<ParticleSystemRenderer>();
-            renderer.renderMode = ParticleSystemRenderMode.Billboard;
-
-            particleSystem.Play();
-        }
-
         private GameObject CreatePrimitive(
             PrimitiveType primitiveType,
             string objectName,
@@ -890,9 +824,6 @@ namespace Underwater
         {
             reefMaterial = CreateLitMaterial(new Color(0.14f, 0.2f, 0.19f), new Color(0.04f, 0.09f, 0.08f), 0.18f, 0.03f);
             kelpMaterial = CreateLitMaterial(new Color(0.1f, 0.25f, 0.16f), new Color(0.02f, 0.08f, 0.05f), 0.32f, 0.02f);
-            threadBodyMaterial = CreateLitMaterial(new Color(0.78f, 0.32f, 0.18f), new Color(0.22f, 0.05f, 0.03f), 0.36f, 0.04f);
-            threadAccentMaterial = CreateLitMaterial(new Color(0.98f, 0.68f, 0.34f), new Color(0.28f, 0.11f, 0.05f), 0.22f, 0f);
-            rollMaterial = CreateLitMaterial(new Color(0.88f, 0.67f, 0.4f), new Color(0.18f, 0.08f, 0.03f), 0.28f, 0.02f);
             surfaceMaterial = CreateUnlitMaterial(new Color(0.3f, 0.78f, 0.88f, 0.18f));
         }
 

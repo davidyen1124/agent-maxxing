@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -31,12 +32,9 @@ namespace Underwater
         private ClientWebSocket socket;
         private int requestId;
         private float nextWorldSyncAt;
+        private bool worldSyncInFlight;
         private bool appServerSocketOpen;
         private bool codexConnected;
-        private string codexHomePath;
-        private string sessionIndexPath;
-        private string sessionsRootPath;
-        private string archivedSessionsRootPath;
         private string lastCodexPhase = "offline";
         private string lastCodexText = "Thread mirror offline";
 
@@ -48,31 +46,13 @@ namespace Underwater
             public string source;
         }
 
-        #pragma warning disable 0649
-        [Serializable]
-        private sealed class SessionIndexEntry
-        {
-            public string id;
-            public string thread_name;
-            public string updated_at;
-        }
-        #pragma warning restore 0649
-
-        private sealed class SessionIndexRecord
+        private sealed class AppServerThreadRecord
         {
             public string id;
             public string title;
-            public string updatedAtUtc;
-
-            public static SessionIndexRecord CreateFallback(string id, string title, string updatedAtUtc)
-            {
-                return new SessionIndexRecord
-                {
-                    id = id,
-                    title = title,
-                    updatedAtUtc = updatedAtUtc
-                };
-            }
+            public string statusMessage;
+            public string phase;
+            public DateTime updatedAtUtc;
         }
 
         public string BridgeUrl => codexServerUrl;
@@ -82,17 +62,6 @@ namespace Underwater
         public void Initialize(UnderwaterGameDirector owningDirector)
         {
             director = owningDirector;
-            codexHomePath = Environment.GetEnvironmentVariable("CODEX_HOME");
-
-            if (string.IsNullOrWhiteSpace(codexHomePath))
-            {
-                string homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                codexHomePath = Path.Combine(homeDirectory, ".codex");
-            }
-
-            sessionIndexPath = Path.Combine(codexHomePath, "session_index.jsonl");
-            sessionsRootPath = Path.Combine(codexHomePath, "sessions");
-            archivedSessionsRootPath = Path.Combine(codexHomePath, "archived_sessions");
         }
 
         private void Start()
@@ -327,124 +296,169 @@ namespace Underwater
                 return;
             }
 
+            if (!IsConnected)
+            {
+                SyncPendingWorldThreads("Websocket offline.");
+                return;
+            }
+
+            if (worldSyncInFlight)
+            {
+                return;
+            }
+
+            worldSyncInFlight = true;
+            CancellationToken token = lifecycleCts != null ? lifecycleCts.Token : CancellationToken.None;
+            _ = RefreshWorldFromAppServerAsync(token);
+        }
+
+        private async Task RefreshWorldFromAppServerAsync(CancellationToken token)
+        {
             try
             {
-                Dictionary<string, SessionIndexRecord> indexedThreads = ReadSessionIndex();
-                HashSet<string> liveSessionIds = ReadSessionIdsFromDirectory(sessionsRootPath);
-                HashSet<string> archivedSessionIds = ReadSessionIdsFromDirectory(archivedSessionsRootPath);
-                List<AquariumThreadSnapshot> liveThreads = new List<AquariumThreadSnapshot>();
-                List<AquariumArchivedRollSnapshot> rolls = new List<AquariumArchivedRollSnapshot>();
-                List<string> resolvedPendingIds = new List<string>();
+                Dictionary<string, object> response = await SendRequestAsync("thread/list", new Dictionary<string, object>(), token);
+                List<AppServerThreadRecord> appThreads = ReadAppServerThreads(response);
 
-                foreach (KeyValuePair<string, PendingWorldThread> pair in pendingWorldThreads)
+                EnqueueMainThread(() =>
                 {
-                    if (liveSessionIds.Contains(pair.Key) || archivedSessionIds.Contains(pair.Key))
-                    {
-                        resolvedPendingIds.Add(pair.Key);
-                    }
-                }
-
-                for (int i = 0; i < resolvedPendingIds.Count; i++)
-                {
-                    pendingWorldThreads.Remove(resolvedPendingIds[i]);
-                }
-
-                foreach (string id in liveSessionIds)
-                {
-                    if (archivedSessionIds.Contains(id))
-                    {
-                        continue;
-                    }
-
-                    SessionIndexRecord record = indexedThreads.TryGetValue(id, out SessionIndexRecord indexed)
-                        ? indexed
-                        : SessionIndexRecord.CreateFallback(id, "Active thread", DateTime.UtcNow.ToString("o"));
-                    liveThreads.Add(CreateThreadSnapshot(record, "filesystem"));
-                }
-
-                foreach (KeyValuePair<string, PendingWorldThread> pair in pendingWorldThreads)
-                {
-                    if (!liveSessionIds.Contains(pair.Key))
-                    {
-                        DateTime createdAt = DateTime.UtcNow;
-
-                        if (!string.IsNullOrWhiteSpace(pair.Value.createdAtUtc))
-                        {
-                            DateTime.TryParse(pair.Value.createdAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out createdAt);
-                        }
-
-                        liveThreads.Add(new AquariumThreadSnapshot
-                        {
-                            id = pair.Value.id,
-                            title = pair.Value.title,
-                            phase = "fresh",
-                            source = pair.Value.source,
-                            ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - createdAt).TotalMinutes)
-                        });
-                    }
-                }
-
-                foreach (string id in archivedSessionIds)
-                {
-                    if (indexedThreads.TryGetValue(id, out SessionIndexRecord record))
-                    {
-                        rolls.Add(new AquariumArchivedRollSnapshot
-                        {
-                            id = record.id,
-                            title = record.title
-                        });
-                    }
-                    else
-                    {
-                        rolls.Add(new AquariumArchivedRollSnapshot
-                        {
-                            id = id,
-                            title = "Archived thread"
-                        });
-                    }
-                }
-
-                liveThreads.Sort((left, right) =>
-                {
-                    int ageComparison = left.ageMinutes.CompareTo(right.ageMinutes);
-
-                    if (ageComparison != 0)
-                    {
-                        return ageComparison;
-                    }
-
-                    return string.CompareOrdinal(left.title, right.title);
+                    worldSyncInFlight = false;
+                    SyncAppServerWorldThreads(appThreads);
                 });
-                rolls.Sort((left, right) => string.CompareOrdinal(left.title, right.title));
-
-                string connectionLabel = IsConnected ? "Websocket connected." : "Websocket offline.";
-                string detail = $"{connectionLabel} Mirroring {liveThreads.Count} active threads and {rolls.Count} archived rolls.";
-                director.SyncThreadWorld(liveThreads, rolls, detail);
-                director.UpdateBridgeState(codexConnected ? "ready" : "offline", detail);
+            }
+            catch (OperationCanceledException)
+            {
+                EnqueueMainThread(() => worldSyncInFlight = false);
             }
             catch (Exception ex)
             {
-                director.UpdateBridgeState("warning", $"Thread mirror failed: {ex.Message}");
-                Debug.LogError($"[AquariumDirectorBridge] Thread mirror failed: {ex}");
+                EnqueueMainThread(() =>
+                {
+                    worldSyncInFlight = false;
+
+                    if (director != null)
+                    {
+                        director.UpdateBridgeState("warning", $"Thread mirror failed: {ex.Message}");
+                    }
+
+                    Debug.LogError($"[AquariumDirectorBridge] Thread mirror failed: {ex}");
+                });
             }
         }
 
-        private AquariumThreadSnapshot CreateThreadSnapshot(SessionIndexRecord record, string source)
+        private void SyncAppServerWorldThreads(List<AppServerThreadRecord> appThreads)
         {
-            DateTime updatedAt = DateTime.UtcNow;
-
-            if (!string.IsNullOrWhiteSpace(record.updatedAtUtc))
+            if (director == null)
             {
-                DateTime.TryParse(record.updatedAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out updatedAt);
+                return;
             }
 
-            float ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - updatedAt).TotalMinutes);
+            List<AquariumThreadSnapshot> liveThreads = new List<AquariumThreadSnapshot>();
+            List<AquariumArchivedPetSnapshot> archivedPets = new List<AquariumArchivedPetSnapshot>();
+            HashSet<string> appThreadIds = new HashSet<string>();
+            List<string> resolvedPendingIds = new List<string>();
+
+            for (int i = 0; i < appThreads.Count; i++)
+            {
+                AppServerThreadRecord record = appThreads[i];
+
+                if (string.IsNullOrWhiteSpace(record.id) || string.IsNullOrWhiteSpace(record.title))
+                {
+                    continue;
+                }
+
+                appThreadIds.Add(record.id);
+                liveThreads.Add(CreateThreadSnapshot(record, "app-server"));
+            }
+
+            foreach (KeyValuePair<string, PendingWorldThread> pair in pendingWorldThreads)
+            {
+                if (appThreadIds.Contains(pair.Key))
+                {
+                    resolvedPendingIds.Add(pair.Key);
+                }
+            }
+
+            for (int i = 0; i < resolvedPendingIds.Count; i++)
+            {
+                pendingWorldThreads.Remove(resolvedPendingIds[i]);
+            }
+
+            AddPendingThreadSnapshots(liveThreads, appThreadIds);
+            SortAndSyncWorld(liveThreads, archivedPets, "Websocket connected.");
+        }
+
+        private void SyncPendingWorldThreads(string connectionLabel)
+        {
+            List<AquariumThreadSnapshot> liveThreads = new List<AquariumThreadSnapshot>();
+            List<AquariumArchivedPetSnapshot> archivedPets = new List<AquariumArchivedPetSnapshot>();
+
+            AddPendingThreadSnapshots(liveThreads, new HashSet<string>());
+            SortAndSyncWorld(liveThreads, archivedPets, connectionLabel);
+        }
+
+        private void AddPendingThreadSnapshots(List<AquariumThreadSnapshot> liveThreads, HashSet<string> knownThreadIds)
+        {
+            foreach (KeyValuePair<string, PendingWorldThread> pair in pendingWorldThreads)
+            {
+                if (knownThreadIds.Contains(pair.Key) || string.IsNullOrWhiteSpace(pair.Value.title))
+                {
+                    continue;
+                }
+
+                DateTime createdAt = DateTime.UtcNow;
+
+                if (!string.IsNullOrWhiteSpace(pair.Value.createdAtUtc))
+                {
+                    DateTime.TryParse(pair.Value.createdAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out createdAt);
+                }
+
+                liveThreads.Add(new AquariumThreadSnapshot
+                {
+                    id = pair.Value.id,
+                    title = pair.Value.title,
+                    statusMessage = "Starting chat",
+                    phase = "fresh",
+                    source = pair.Value.source,
+                    ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - createdAt).TotalMinutes)
+                });
+            }
+        }
+
+        private void SortAndSyncWorld(List<AquariumThreadSnapshot> liveThreads, List<AquariumArchivedPetSnapshot> archivedPets, string connectionLabel)
+        {
+            if (director == null)
+            {
+                return;
+            }
+
+            liveThreads.Sort((left, right) =>
+            {
+                int ageComparison = left.ageMinutes.CompareTo(right.ageMinutes);
+
+                if (ageComparison != 0)
+                {
+                    return ageComparison;
+                }
+
+                return string.CompareOrdinal(left.title, right.title);
+            });
+            archivedPets.Sort((left, right) => string.CompareOrdinal(left.title, right.title));
+
+            string detail = $"{connectionLabel} Mirroring {liveThreads.Count} active threads and {archivedPets.Count} archived pets.";
+            director.SyncThreadWorld(liveThreads, archivedPets, detail);
+            director.UpdateBridgeState(codexConnected ? "ready" : "offline", detail);
+        }
+
+        private AquariumThreadSnapshot CreateThreadSnapshot(AppServerThreadRecord record, string source)
+        {
+            float ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - record.updatedAtUtc).TotalMinutes);
 
             return new AquariumThreadSnapshot
             {
                 id = record.id,
-                title = string.IsNullOrWhiteSpace(record.title) ? "Untitled thread" : record.title,
-                phase = DetermineThreadPhase(ageMinutes),
+                title = record.title,
+                statusMessage = record.statusMessage,
+                phase = string.IsNullOrWhiteSpace(record.phase) ? DetermineThreadPhase(ageMinutes) : record.phase,
                 source = source,
                 ageMinutes = ageMinutes
             };
@@ -470,89 +484,466 @@ namespace Underwater
             return "idle";
         }
 
-        private Dictionary<string, SessionIndexRecord> ReadSessionIndex()
+        private static List<AppServerThreadRecord> ReadAppServerThreads(Dictionary<string, object> response)
         {
-            Dictionary<string, SessionIndexRecord> records = new Dictionary<string, SessionIndexRecord>();
+            List<AppServerThreadRecord> records = new List<AppServerThreadRecord>();
+            object data = Traverse(response, "result", "data");
 
-            if (string.IsNullOrWhiteSpace(sessionIndexPath) || !File.Exists(sessionIndexPath))
+            if (!(data is List<object> threads))
             {
                 return records;
             }
 
-            string[] lines = File.ReadAllLines(sessionIndexPath);
-
-            for (int i = 0; i < lines.Length; i++)
+            for (int i = 0; i < threads.Count; i++)
             {
-                string line = lines[i];
-
-                if (string.IsNullOrWhiteSpace(line))
+                if (!(threads[i] is Dictionary<string, object> thread))
                 {
                     continue;
                 }
 
-                SessionIndexEntry entry;
+                string id = ReadString(thread, "id") ?? ReadString(thread, "sessionId");
+                string title = ReadThreadTitle(thread);
 
-                try
-                {
-                    entry = JsonUtility.FromJson<SessionIndexEntry>(line);
-                }
-                catch
+                if (string.IsNullOrWhiteSpace(id))
                 {
                     continue;
                 }
 
-                if (entry == null || string.IsNullOrWhiteSpace(entry.id))
-                {
-                    continue;
-                }
+                DateTime updatedAtUtc = ReadUnixTimestampSeconds(thread, "updatedAt")
+                    ?? ReadUnixTimestampSeconds(thread, "updated_at")
+                    ?? ReadUnixTimestampSeconds(thread, "createdAt")
+                    ?? ReadUnixTimestampSeconds(thread, "created_at")
+                    ?? DateTime.UtcNow;
+                string statusId = ReadThreadStatusId(thread);
+                float ageMinutes = Mathf.Max(0f, (float)(DateTime.UtcNow - updatedAtUtc).TotalMinutes);
 
-                records[entry.id] = new SessionIndexRecord
+                records.Add(new AppServerThreadRecord
                 {
-                    id = entry.id,
-                    title = string.IsNullOrWhiteSpace(entry.thread_name) ? "Untitled thread" : entry.thread_name,
-                    updatedAtUtc = string.IsNullOrWhiteSpace(entry.updated_at) ? DateTime.UtcNow.ToString("o") : entry.updated_at
-                };
+                    id = id.Trim(),
+                    title = title.Trim(),
+                    statusMessage = BuildThreadStatusMessage(thread, statusId),
+                    phase = DetermineThreadPhase(statusId, ageMinutes),
+                    updatedAtUtc = updatedAtUtc
+                });
             }
 
             return records;
         }
 
-        private HashSet<string> ReadSessionIdsFromDirectory(string rootPath)
+        private static string ReadThreadTitle(Dictionary<string, object> thread)
         {
-            HashSet<string> ids = new HashSet<string>();
+            string title = ReadString(thread, "name");
 
-            if (string.IsNullOrWhiteSpace(rootPath) || !Directory.Exists(rootPath))
+            if (string.IsNullOrWhiteSpace(title))
             {
-                return ids;
+                title = ReadString(thread, "title");
             }
 
-            string[] files = Directory.GetFiles(rootPath, "*.jsonl", SearchOption.AllDirectories);
-
-            for (int i = 0; i < files.Length; i++)
+            if (string.IsNullOrWhiteSpace(title))
             {
-                string id = ExtractThreadIdFromPath(files[i]);
+                title = ReadString(thread, "preview");
+            }
 
-                if (!string.IsNullOrWhiteSpace(id))
+            string cleaned = CleanBubbleText(title, 80);
+            return string.IsNullOrWhiteSpace(cleaned) ? "New chat" : cleaned;
+        }
+
+        private static string BuildThreadStatusMessage(Dictionary<string, object> thread, string statusId)
+        {
+            string activityMessage = ReadLatestActivityMessage(thread);
+
+            if (!string.IsNullOrWhiteSpace(activityMessage))
+            {
+                return activityMessage;
+            }
+
+            switch ((statusId ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "waiting":
+                    return "Needs input";
+                case "failed":
+                    return "Blocked";
+                case "review":
+                    return "Ready";
+                case "running":
+                    return "Thinking";
+                case "idle":
+                    return "Idle";
+                default:
+                    return "Info";
+            }
+        }
+
+        private static string DetermineThreadPhase(string statusId, float ageMinutes)
+        {
+            switch ((statusId ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "failed":
+                    return "failed";
+                case "waiting":
+                    return "warning";
+                case "review":
+                    return "responding";
+                case "running":
+                    return ageMinutes <= 2f ? "fresh" : "working";
+                default:
+                    return DetermineThreadPhase(ageMinutes);
+            }
+        }
+
+        private static string ReadThreadStatusId(Dictionary<string, object> thread)
+        {
+            string cloudTurnStatus = ReadString(thread, "task_status_display", "latest_turn_status_display", "turn_status");
+
+            if (!string.IsNullOrWhiteSpace(cloudTurnStatus))
+            {
+                switch (cloudTurnStatus.Trim().ToLowerInvariant())
                 {
-                    ids.Add(id);
+                    case "failed":
+                    case "cancelled":
+                        return "failed";
+                    case "in_progress":
+                    case "pending":
+                        return "running";
                 }
             }
 
-            return ids;
+            if (HasRequestUserInput(thread))
+            {
+                return "waiting";
+            }
+
+            Dictionary<string, object> status = Traverse(thread, "status") as Dictionary<string, object>;
+            string type = ReadString(status, "type");
+
+            switch ((type ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "active":
+                    return HasActiveFlag(status, "waitingOnUserInput") ? "waiting" : "running";
+                case "systemerror":
+                    return "failed";
+            }
+
+            List<object> turns = Traverse(thread, "turns") as List<object>;
+
+            if (turns != null && turns.Count > 0)
+            {
+                Dictionary<string, object> lastTurn = turns[turns.Count - 1] as Dictionary<string, object>;
+                string turnStatus = ReadString(lastTurn, "status");
+
+                switch ((turnStatus ?? string.Empty).Trim().ToLowerInvariant())
+                {
+                    case "inprogress":
+                    case "in_progress":
+                        return "running";
+                    case "failed":
+                        return "failed";
+                }
+            }
+
+            if (ReadBool(thread, "has_unread_turn") || ReadBool(thread, "hasUnreadTurn"))
+            {
+                return "review";
+            }
+
+            return "idle";
         }
 
-        private static string ExtractThreadIdFromPath(string path)
+        private static bool HasActiveFlag(Dictionary<string, object> status, string flag)
         {
-            string filename = Path.GetFileNameWithoutExtension(path);
+            List<object> flags = Traverse(status, "activeFlags") as List<object>;
 
-            if (string.IsNullOrWhiteSpace(filename) || filename.Length < 36)
+            if (flags == null)
+            {
+                flags = Traverse(status, "active_flags") as List<object>;
+            }
+
+            if (flags == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < flags.Count; i++)
+            {
+                if (string.Equals(flags[i] as string, flag, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool HasRequestUserInput(Dictionary<string, object> thread)
+        {
+            List<object> requests = Traverse(thread, "requests") as List<object>;
+
+            if (requests == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < requests.Count; i++)
+            {
+                Dictionary<string, object> request = requests[i] as Dictionary<string, object>;
+
+                if (string.Equals(ReadString(request, "method"), "item/tool/requestUserInput", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string ReadLatestActivityMessage(Dictionary<string, object> thread)
+        {
+            List<object> turns = Traverse(thread, "turns") as List<object>;
+
+            if (turns == null)
+            {
+                return null;
+            }
+
+            for (int turnIndex = turns.Count - 1; turnIndex >= 0; turnIndex--)
+            {
+                Dictionary<string, object> turn = turns[turnIndex] as Dictionary<string, object>;
+                List<object> items = Traverse(turn, "items") as List<object>;
+                string message = ReadLatestReasoningOrAgentMessage(items);
+
+                if (!string.IsNullOrWhiteSpace(message))
+                {
+                    return message;
+                }
+
+                message = ReadLatestToolActivityMessage(items);
+
+                if (!string.IsNullOrWhiteSpace(message))
+                {
+                    return message;
+                }
+            }
+
+            return null;
+        }
+
+        private static string ReadLatestReasoningOrAgentMessage(List<object> items)
+        {
+            if (items == null)
+            {
+                return null;
+            }
+
+            for (int i = items.Count - 1; i >= 0; i--)
+            {
+                Dictionary<string, object> item = items[i] as Dictionary<string, object>;
+                string type = ReadString(item, "type");
+
+                if (string.Equals(type, "reasoning", StringComparison.Ordinal))
+                {
+                    List<object> summary = Traverse(item, "summary") as List<object>;
+
+                    if (summary != null)
+                    {
+                        for (int summaryIndex = summary.Count - 1; summaryIndex >= 0; summaryIndex--)
+                        {
+                            string cleaned = CleanBubbleText(summary[summaryIndex] as string, 72);
+
+                            if (!string.IsNullOrWhiteSpace(cleaned))
+                            {
+                                return cleaned;
+                            }
+                        }
+                    }
+                }
+
+                if (string.Equals(type, "agentMessage", StringComparison.Ordinal))
+                {
+                    string cleaned = CleanBubbleText(ReadString(item, "text"), 72);
+
+                    if (!string.IsNullOrWhiteSpace(cleaned))
+                    {
+                        return cleaned;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static string ReadLatestToolActivityMessage(List<object> items)
+        {
+            if (items == null)
+            {
+                return null;
+            }
+
+            for (int i = items.Count - 1; i >= 0; i--)
+            {
+                Dictionary<string, object> item = items[i] as Dictionary<string, object>;
+                string message = BuildActivityMessage(item);
+
+                if (!string.IsNullOrWhiteSpace(message))
+                {
+                    return message;
+                }
+            }
+
+            return null;
+        }
+
+        private static string BuildActivityMessage(Dictionary<string, object> item)
+        {
+            if (item == null)
+            {
+                return null;
+            }
+
+            string type = ReadString(item, "type");
+            bool inProgress = string.Equals(ReadString(item, "status"), "inProgress", StringComparison.Ordinal);
+
+            switch (type)
+            {
+                case "commandExecution":
+                    return BuildCommandActivityMessage(item, inProgress);
+                case "fileChange":
+                    return BuildFileChangeActivityMessage(item, inProgress);
+                case "mcpToolCall":
+                    return BuildMcpToolActivityMessage(item, inProgress);
+                case "webSearch":
+                    return BuildWebSearchActivityMessage(item);
+                default:
+                    return null;
+            }
+        }
+
+        private static string BuildCommandActivityMessage(Dictionary<string, object> item, bool inProgress)
+        {
+            List<object> commandActions = Traverse(item, "commandActions") as List<object>;
+            Dictionary<string, object> action = commandActions != null && commandActions.Count > 0
+                ? commandActions[commandActions.Count - 1] as Dictionary<string, object>
+                : null;
+
+            if (action == null)
+            {
+                return inProgress ? "Running command" : "Ran command";
+            }
+
+            switch (ReadString(action, "type"))
+            {
+                case "read":
+                    string fileName = CleanBubbleText(ReadString(action, "name"), 36);
+                    string fileLabel = string.IsNullOrWhiteSpace(fileName) ? "file" : fileName;
+                    return inProgress
+                        ? $"Reading {fileLabel}"
+                        : $"Read {fileLabel}";
+                case "listFiles":
+                    return inProgress ? "Listing files" : "Listed files";
+                case "search":
+                    string query = CleanBubbleText(ReadString(action, "query"), 36);
+                    return string.IsNullOrWhiteSpace(query)
+                        ? inProgress ? "Searching files" : "Searched files"
+                        : inProgress ? $"Searching \"{query}\"" : $"Searched \"{query}\"";
+                default:
+                    return inProgress ? "Running command" : "Ran command";
+            }
+        }
+
+        private static string BuildFileChangeActivityMessage(Dictionary<string, object> item, bool inProgress)
+        {
+            List<object> changes = Traverse(item, "changes") as List<object>;
+            int fileCount = changes != null ? changes.Count : 0;
+            string label = fileCount == 1 ? "1 file" : $"{fileCount} files";
+            return inProgress ? $"Editing {label}" : $"Edited {label}";
+        }
+
+        private static string BuildMcpToolActivityMessage(Dictionary<string, object> item, bool inProgress)
+        {
+            string toolName = CleanBubbleText((ReadString(item, "tool") ?? string.Empty).Replace('_', ' ').Replace('-', ' '), 36);
+            return string.IsNullOrWhiteSpace(toolName)
+                ? inProgress ? "Calling tool" : "Called tool"
+                : inProgress ? $"Calling {toolName}" : $"Called {toolName}";
+        }
+
+        private static string BuildWebSearchActivityMessage(Dictionary<string, object> item)
+        {
+            string query = CleanBubbleText(ReadString(item, "query"), 36);
+            return string.IsNullOrWhiteSpace(query) ? "Searched web" : $"Searched \"{query}\"";
+        }
+
+        private static string CleanBubbleText(string text, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(text))
             {
                 return string.Empty;
             }
 
-            string maybeId = filename.Substring(filename.Length - 36);
-            Guid parsed;
-            return Guid.TryParse(maybeId, out parsed) ? maybeId : string.Empty;
+            string cleaned = Regex.Replace(text, @"\r?\n+", " ");
+            cleaned = Regex.Replace(cleaned, @"^\s{0,3}#{1,6}\s+", string.Empty);
+            cleaned = Regex.Replace(cleaned, @"\*\*([^*]+)\*\*", "$1");
+            cleaned = Regex.Replace(cleaned, @"__([^_]+)__", "$1");
+            cleaned = Regex.Replace(cleaned, @"`([^`]+)`", "$1");
+            cleaned = Regex.Replace(cleaned, @"\*([^*]+)\*", "$1");
+            cleaned = Regex.Replace(cleaned, @"_([^_]+)_", "$1");
+            cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
+
+            if (cleaned.Length <= maxLength)
+            {
+                return cleaned;
+            }
+
+            return cleaned.Substring(0, Mathf.Max(0, maxLength - 3)).TrimEnd() + "...";
+        }
+
+        private static DateTime? ReadUnixTimestampSeconds(Dictionary<string, object> root, string key)
+        {
+            if (root == null || !root.TryGetValue(key, out object value))
+            {
+                return null;
+            }
+
+            double seconds;
+
+            if (value is long longValue)
+            {
+                seconds = longValue;
+            }
+            else if (value is double doubleValue)
+            {
+                seconds = doubleValue;
+            }
+            else if (value is string stringValue && double.TryParse(stringValue, NumberStyles.Any, CultureInfo.InvariantCulture, out double parsed))
+            {
+                seconds = parsed;
+            }
+            else
+            {
+                return null;
+            }
+
+            try
+            {
+                return DateTimeOffset.FromUnixTimeSeconds((long)seconds).UtcDateTime;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return null;
+            }
+        }
+
+        private static bool ReadBool(Dictionary<string, object> root, string key)
+        {
+            if (root == null || !root.TryGetValue(key, out object value))
+            {
+                return false;
+            }
+
+            if (value is bool boolValue)
+            {
+                return boolValue;
+            }
+
+            return value is string stringValue && bool.TryParse(stringValue, out bool parsed) && parsed;
         }
 
         private async Task ReceiveLoopAsync(ClientWebSocket localSocket, CancellationToken token)

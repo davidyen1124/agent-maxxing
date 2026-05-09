@@ -15,7 +15,7 @@ namespace Underwater.Tests
             yield return null;
             yield return null;
 
-            UnderwaterGameDirector director = Object.FindFirstObjectByType<UnderwaterGameDirector>();
+            UnderwaterGameDirector director = Object.FindAnyObjectByType<UnderwaterGameDirector>();
 
             Assert.That(director, Is.Not.Null, "Runtime bootstrap should create the underwater director.");
             Assert.That(director.Player, Is.Not.Null, "Runtime bootstrap should create the player rig.");
@@ -24,7 +24,7 @@ namespace Underwater.Tests
             Assert.That(Camera.main, Is.Not.Null, "Expected a main camera for first-person swimming.");
             Assert.That(director.Player.BoostNormalized, Is.GreaterThan(0.99f), "Player should start with full swim boost.");
             Assert.That(director.ActiveThreadCount, Is.GreaterThanOrEqualTo(0), "Thread count should be readable on boot.");
-            Assert.That(director.ArchivedRollCount, Is.GreaterThanOrEqualTo(0), "Archived roll count should be readable on boot.");
+            Assert.That(director.ArchivedPetCount, Is.GreaterThanOrEqualTo(0), "Archived pet count should be readable on boot.");
         }
     }
 }

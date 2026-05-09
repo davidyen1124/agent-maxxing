@@ -1,0 +1,8 @@
+{
+  "id": "roxy-pixel",
+  "displayName": "Roxy Pixel",
+  "description": "Pixel Roxy mage pet with ornate long staff.",
+  "kind": "person",
+  "source": "codex-pets.net popular",
+  "spritesheetPath": "spritesheet.webp"
+}

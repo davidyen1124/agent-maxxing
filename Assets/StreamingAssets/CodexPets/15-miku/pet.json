@@ -1,0 +1,8 @@
+{
+  "id": "miku",
+  "displayName": "Miku",
+  "description": "based on hatsune miku.",
+  "kind": "creature",
+  "source": "codex-pets.net popular",
+  "spritesheetPath": "spritesheet.webp"
+}

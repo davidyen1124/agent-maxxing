@@ -1,0 +1,8 @@
+{
+  "id": "doge",
+  "displayName": "Doge",
+  "description": "A cute Doge-style Shiba Inu companion for Codex.",
+  "kind": "animal",
+  "source": "codex-pets.net popular",
+  "spritesheetPath": "spritesheet.webp"
+}

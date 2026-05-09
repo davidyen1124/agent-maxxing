@@ -1,0 +1,8 @@
+{
+  "id": "dobby",
+  "displayName": "Dobby",
+  "description": "A tiny loyal house-elf companion inspired by Dobby from Harry Potter.",
+  "kind": "creature",
+  "source": "codex-pets.net popular",
+  "spritesheetPath": "spritesheet.webp"
+}

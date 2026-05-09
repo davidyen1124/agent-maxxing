@@ -1,0 +1,8 @@
+{
+  "id": "pika",
+  "displayName": "Pika",
+  "description": "A tiny yellow electric mouse digital pet based on the uploaded Pika sprite.",
+  "kind": "creature",
+  "source": "codex-pets.net popular",
+  "spritesheetPath": "spritesheet.webp"
+}

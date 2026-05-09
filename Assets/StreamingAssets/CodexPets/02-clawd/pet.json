@@ -1,0 +1,8 @@
+{
+  "id": "clawd",
+  "displayName": "Clawd",
+  "description": "A compact Codex pet based on official Claude Code pixel Clawd frames, extracted without stretching.",
+  "kind": "creature",
+  "source": "codex-pets.net popular",
+  "spritesheetPath": "spritesheet.webp"
+}

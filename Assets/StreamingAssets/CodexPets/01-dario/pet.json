@@ -1,0 +1,8 @@
+{
+  "id": "dario",
+  "displayName": "Dario",
+  "description": "A tiny frustrated Codex pet inspired by Dario, CEO of Anthropic, with curly dark hair, black glasses, furrowed brow, and skeptical grimace.",
+  "kind": "person",
+  "source": "codex-pets.net popular",
+  "spritesheetPath": "spritesheet.webp"
+}

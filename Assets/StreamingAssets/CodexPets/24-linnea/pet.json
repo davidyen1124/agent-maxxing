@@ -1,0 +1,8 @@
+{
+  "id": "linnea",
+  "displayName": "Linnea",
+  "description": "A tiny Augury Bird fae adventurer with folded head wings and her wavy frost-sprite partner Lumi in her backpack.",
+  "kind": "person",
+  "source": "codex-pets.net popular",
+  "spritesheetPath": "spritesheet.webp"
+}

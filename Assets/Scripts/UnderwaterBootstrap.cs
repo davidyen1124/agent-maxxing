@@ -25,7 +25,7 @@ namespace Underwater
 
         private static void EnsureDirector()
         {
-            if (Object.FindFirstObjectByType<UnderwaterGameDirector>() == null)
+            if (Object.FindAnyObjectByType<UnderwaterGameDirector>() == null)
             {
                 GameObject directorObject = new GameObject("Underwater Director");
                 directorObject.AddComponent<UnderwaterGameDirector>();
