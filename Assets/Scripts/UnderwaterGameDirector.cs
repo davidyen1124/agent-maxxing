@@ -647,7 +647,7 @@ namespace Underwater
                     continue;
                 }
 
-                string message = Shorten(thread.StatusMessage, 64);
+                string message = Shorten(thread.BubbleMessage, 64);
                 DrawNameTag(camera, message, thread.transform.position + Vector3.up * 1.55f);
             }
 

@@ -1045,31 +1045,67 @@ namespace Underwater
 
                 if (string.Equals(type, "reasoning", StringComparison.Ordinal))
                 {
-                    List<object> summary = Traverse(item, "summary") as List<object>;
-
-                    if (summary != null)
-                    {
-                        for (int summaryIndex = summary.Count - 1; summaryIndex >= 0; summaryIndex--)
-                        {
-                            string cleaned = CleanBubbleText(summary[summaryIndex] as string, 72);
-
-                            if (!string.IsNullOrWhiteSpace(cleaned))
-                            {
-                                return cleaned;
-                            }
-                        }
-                    }
-                }
-
-                if (string.Equals(type, "agentMessage", StringComparison.Ordinal))
-                {
-                    string cleaned = CleanBubbleText(ReadString(item, "text"), 72);
+                    string cleaned = ReadLatestCleanText(Traverse(item, "summary"), 72)
+                        ?? ReadLatestCleanText(Traverse(item, "content"), 72)
+                        ?? ReadLatestCleanText(Traverse(item, "text"), 72);
 
                     if (!string.IsNullOrWhiteSpace(cleaned))
                     {
                         return cleaned;
                     }
                 }
+
+                if (string.Equals(type, "agentMessage", StringComparison.Ordinal))
+                {
+                    string cleaned = ReadLatestCleanText(Traverse(item, "text"), 72)
+                        ?? ReadLatestCleanText(Traverse(item, "content"), 72);
+
+                    if (!string.IsNullOrWhiteSpace(cleaned))
+                    {
+                        return cleaned;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static string ReadLatestCleanText(object value, int maxLength)
+        {
+            if (value is string text)
+            {
+                string cleaned = CleanBubbleText(text, maxLength);
+                return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
+            }
+
+            if (value is List<object> items)
+            {
+                for (int i = items.Count - 1; i >= 0; i--)
+                {
+                    string cleaned = ReadLatestCleanText(items[i], maxLength);
+
+                    if (!string.IsNullOrWhiteSpace(cleaned))
+                    {
+                        return cleaned;
+                    }
+                }
+
+                return null;
+            }
+
+            if (value is Dictionary<string, object> dictionary)
+            {
+                string direct = ReadLatestCleanText(Traverse(dictionary, "text"), maxLength)
+                    ?? ReadLatestCleanText(Traverse(dictionary, "message"), maxLength)
+                    ?? ReadLatestCleanText(Traverse(dictionary, "value"), maxLength);
+
+                if (!string.IsNullOrWhiteSpace(direct))
+                {
+                    return direct;
+                }
+
+                return ReadLatestCleanText(Traverse(dictionary, "summary"), maxLength)
+                    ?? ReadLatestCleanText(Traverse(dictionary, "content"), maxLength);
             }
 
             return null;

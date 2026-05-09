@@ -40,6 +40,8 @@ namespace Underwater
 
         public string StatusMessage => statusMessage;
 
+        public string BubbleMessage => BuildBubbleMessage();
+
         public string Phase => phase;
 
         public Vector3 Velocity => velocity;
@@ -437,6 +439,45 @@ namespace Underwater
                     return "Idle";
                 default:
                     return "Info";
+            }
+        }
+
+        private string BuildBubbleMessage()
+        {
+            return ShouldShowTitleProgress(statusMessage) ? BuildTitleProgressMessage() : statusMessage;
+        }
+
+        private string BuildTitleProgressMessage()
+        {
+            string label = string.IsNullOrWhiteSpace(title) ? "Untitled thread" : title.Trim();
+            const int maxLength = 64;
+
+            if (label.EndsWith("...", System.StringComparison.Ordinal))
+            {
+                return label.Length <= maxLength ? label : label.Substring(0, maxLength);
+            }
+
+            int maxTitleLength = Mathf.Max(0, maxLength - 3);
+
+            if (label.Length > maxTitleLength)
+            {
+                label = label.Substring(0, maxTitleLength).TrimEnd('.', ' ');
+            }
+
+            return label + "...";
+        }
+
+        private static bool ShouldShowTitleProgress(string message)
+        {
+            switch ((message ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "":
+                case "idle":
+                case "thinking":
+                case "info":
+                    return true;
+                default:
+                    return false;
             }
         }
     }
