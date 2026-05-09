@@ -67,11 +67,17 @@ This file is local user state and should not be committed. Example:
   "niaDefaultSearchMode": "universal",
   "niaMaxTokens": 1200,
   "voiceSampleRate": 24000,
-  "voiceMaxCaptureSeconds": 8
+  "voiceMaxCaptureSeconds": 8,
+  "openAiWebsiteModel": "gpt-5.5",
+  "tensorlakeApiKey": "",
+  "tensorlakeSandboxNamePrefix": "forest-site",
+  "tensorlakePreviewPort": 8080,
+  "insforgeBaseUrl": "",
+  "insforgeApiKey": ""
 }
 ```
 
-`openAiApiKey` enables voice Q&A. `niaApiKey` is optional and only needed when realtime voice answers should search external knowledge.
+`openAiApiKey` enables voice Q&A. `niaApiKey` is optional and only needed when realtime voice answers should search external knowledge. Website voice requests use Tensorlake for the sandbox preview and deploy to InsForge when `insforgeBaseUrl` and `insforgeApiKey` are set.
 
 ## Controls
 

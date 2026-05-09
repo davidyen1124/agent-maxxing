@@ -533,7 +533,7 @@ namespace Forest
 
             if (CanUseWebsiteCommands())
             {
-                instructions += " When the player asks you to create, build, make, generate, preview, or deploy a website, landing page, portfolio, product page, microsite, web page, or web app, call create_demo_website before speaking.";
+                instructions += " When the player asks you to create, build, make, generate, preview, or deploy a website, landing page, portfolio, product page, microsite, web page, or web app, call create_demo_website before speaking; the tool builds in a Tensorlake sandbox and deploys to InsForge when InsForge credentials are configured.";
             }
 
             return instructions;
@@ -668,7 +668,7 @@ namespace Forest
             {
                 ["type"] = "function",
                 ["name"] = "create_demo_website",
-                ["description"] = "Start a sandbox job that creates a small demo website from the player's spoken idea. Use this for requests to make, build, generate, preview, or deploy a website or web page.",
+                ["description"] = "Start a Tensorlake sandbox job that creates a small demo website from the player's spoken idea, then deploy it to InsForge when InsForge credentials are configured. Use this for requests to make, build, generate, preview, or deploy a website or web page.",
                 ["parameters"] = new Dictionary<string, object>
                 {
                     ["type"] = "object",

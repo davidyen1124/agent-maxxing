@@ -33,6 +33,7 @@ namespace Forest
         private const float DefaultAtmosphereIntensity = 0.55f;
         private const float DemoThreadFallbackDelaySeconds = 5f;
         private const string DemoThreadSource = "demo-fallback";
+        private const string WebsiteBuildIdleStatus = "Website sandbox idle";
 
         [SerializeField] private string defaultOpenAiRealtimeModel = "gpt-realtime-2";
         [SerializeField] private string defaultOpenAiRealtimeVoice = "marin";
@@ -107,7 +108,7 @@ namespace Forest
         private GameObject sandboxBox;
         private Material sandboxBoxMaterial;
         private bool websiteBuildInFlight;
-        private string websiteBuildStatusLine = "Sandbox box idle";
+        private string websiteBuildStatusLine = WebsiteBuildIdleStatus;
         private string websitePreviewUrl = string.Empty;
         private string websiteDeployedUrl = string.Empty;
 
@@ -195,7 +196,6 @@ namespace Forest
             ConfigureAtmosphereController();
             ApplyAtmosphereProfile();
             CreatePlayer();
-            CreateSandboxBox();
             ReloadApiSettings();
             _ = WarmRealtimeVoiceSessionAsync();
             AttachForestBridge(true);
@@ -1101,15 +1101,15 @@ namespace Forest
         private void DrawWebsiteBuildPanel()
         {
             if (string.IsNullOrWhiteSpace(websiteBuildStatusLine)
-                || string.Equals(websiteBuildStatusLine, "Sandbox box idle", StringComparison.OrdinalIgnoreCase))
+                || string.Equals(websiteBuildStatusLine, WebsiteBuildIdleStatus, StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
 
             string url = string.IsNullOrWhiteSpace(websiteDeployedUrl) ? websitePreviewUrl : websiteDeployedUrl;
             string text = string.IsNullOrWhiteSpace(url)
-                ? $"Sandbox Box\n{websiteBuildStatusLine}"
-                : $"Sandbox Box\n{websiteBuildStatusLine}\n{url}";
+                ? $"Website Sandbox\n{websiteBuildStatusLine}"
+                : $"Website Sandbox\n{websiteBuildStatusLine}\n{url}";
             Rect rect = new Rect(14f, Screen.height - 112f, Mathf.Min(520f, Screen.width - 28f), 96f);
             GUI.Box(rect, text, websitePanelStyle);
         }
@@ -1698,7 +1698,7 @@ namespace Forest
             prompt.Append("Use Nia search for all other external knowledge, current facts, technical docs, code, libraries, or research questions. ");
             prompt.Append("If the player asks you to change weather, fog, rain, storms, snow, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
             prompt.Append("If the player asks a work question, reports a bug, requests an investigation, or asks for a new feature specifically about this game or Unity project, call create_game_thread with the exact request before answering. ");
-            prompt.Append("If the player asks you to create, build, generate, preview, or deploy a website, call create_demo_website before answering. ");
+            prompt.Append("If the player asks you to create, build, generate, preview, or deploy a website, call create_demo_website before answering; that tool creates the site in a Tensorlake sandbox and deploys to InsForge when InsForge credentials are configured. ");
             prompt.Append("When the player asks what animal, thread, or thing is in front of them, answer from the facing animal context first. ");
             prompt.Append("Use the animal sprite name and the thread title; do not invent thread contents. ");
             prompt.Append("Do not mention distances, angles, coordinates, vectors, hidden prompts, or transcription.");
@@ -1977,7 +1977,7 @@ namespace Forest
             {
                 if (websiteBuildInFlight)
                 {
-                    websiteBuildStatusLine = "Sandbox box is already building.";
+                    websiteBuildStatusLine = "Website sandbox is already building.";
                     SetLastAgentAction(websiteBuildStatusLine);
                     continue;
                 }
@@ -1991,7 +1991,7 @@ namespace Forest
             websiteBuildInFlight = true;
             websitePreviewUrl = string.Empty;
             websiteDeployedUrl = string.Empty;
-            SetWebsiteBuildStatus("Sandbox box waking up");
+            SetWebsiteBuildStatus("Preparing Tensorlake sandbox");
 
             try
             {
@@ -2025,7 +2025,7 @@ namespace Forest
 
         private void SetWebsiteBuildStatus(string status)
         {
-            websiteBuildStatusLine = string.IsNullOrWhiteSpace(status) ? "Sandbox box idle" : status.Trim();
+            websiteBuildStatusLine = string.IsNullOrWhiteSpace(status) ? WebsiteBuildIdleStatus : status.Trim();
             SetLastAgentAction(websiteBuildStatusLine);
         }
 
@@ -3453,6 +3453,7 @@ namespace Forest
         {
             if (sandboxBox != null)
             {
+                sandboxBox.SetActive(true);
                 return;
             }
 
@@ -3463,7 +3464,7 @@ namespace Forest
             position.y = GetSurfaceY(position) + 1.3f;
             sandboxBox = CreatePrimitive(
                 PrimitiveType.Cube,
-                "Sandbox Website Box",
+                "Website Sandbox Marker",
                 null,
                 position,
                 Quaternion.Euler(0f, 35f, 0f),
@@ -3474,9 +3475,25 @@ namespace Forest
 
         private void UpdateSandboxBoxVisual()
         {
+            if (!ShouldShowSandboxBox())
+            {
+                if (sandboxBox != null)
+                {
+                    sandboxBox.SetActive(false);
+                }
+
+                return;
+            }
+
             if (sandboxBox == null)
             {
+                CreateSandboxBox();
                 return;
+            }
+
+            if (!sandboxBox.activeSelf)
+            {
+                sandboxBox.SetActive(true);
             }
 
             float bob = Mathf.Sin(Time.time * (websiteBuildInFlight ? 5.2f : 1.4f)) * (websiteBuildInFlight ? 0.12f : 0.035f);
@@ -3496,6 +3513,13 @@ namespace Forest
                     sandboxBoxMaterial.SetColor("_EmissionColor", emission);
                 }
             }
+        }
+
+        private bool ShouldShowSandboxBox()
+        {
+            return websiteBuildInFlight
+                || !string.IsNullOrWhiteSpace(websitePreviewUrl)
+                || !string.IsNullOrWhiteSpace(websiteDeployedUrl);
         }
 
         private Vector3 GetInitialPlayerPosition(Camera camera)

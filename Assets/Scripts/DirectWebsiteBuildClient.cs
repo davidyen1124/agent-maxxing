@@ -72,10 +72,14 @@ namespace Forest
             await ExposeSandboxPortAsync(sandboxId, previewPort, token);
 
             string deployedUrl = string.Empty;
-            if (settings.websiteDeployToInsforge && !string.IsNullOrWhiteSpace(settings.insforgeBaseUrl) && !string.IsNullOrWhiteSpace(settings.insforgeApiKey))
+            if (HasInsForgeDeploymentCredentials())
             {
                 progress?.Invoke("Deploying to InsForge");
                 deployedUrl = await TryDeployToInsForgeAsync(files, token);
+            }
+            else
+            {
+                progress?.Invoke("InsForge credentials missing; keeping Tensorlake preview");
             }
 
             progress?.Invoke(string.IsNullOrWhiteSpace(deployedUrl) ? "Preview ready" : "Deployment ready");
@@ -87,6 +91,12 @@ namespace Forest
                 deployedUrl = deployedUrl,
                 indexHtml = files.indexHtml
             };
+        }
+
+        private bool HasInsForgeDeploymentCredentials()
+        {
+            return !string.IsNullOrWhiteSpace(settings.insforgeBaseUrl)
+                && !string.IsNullOrWhiteSpace(settings.insforgeApiKey);
         }
 
         private async Task<WebsiteFiles> GenerateWebsiteFilesAsync(string idea, string style, string siteType, CancellationToken token)

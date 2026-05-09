@@ -22,6 +22,8 @@ namespace Forest.Tests
             Assert.That(director, Is.Not.Null, "Runtime bootstrap should create the forest director.");
             Assert.That(director.Player, Is.Not.Null, "Runtime bootstrap should create the player rig.");
             Assert.That(director.GetComponent<ForestDirectorBridge>(), Is.Not.Null, "Runtime bootstrap should attach the Codex forest bridge.");
+            Assert.That(GameObject.Find("Website Sandbox Marker"), Is.Null, "Website sandbox marker should not be visible until a voice website request starts.");
+            Assert.That(GameObject.Find("Sandbox Website Box"), Is.Null, "Legacy sandbox box should not be spawned on boot.");
             Assert.That(Object.FindAnyObjectByType<Terrain>(), Is.Not.Null, "Expected the forest terrain scene to be present.");
             Assert.That(Camera.main, Is.Not.Null, "Expected a main camera for first-person movement.");
             Assert.That(director.Player.SprintEnergyNormalized, Is.GreaterThan(0.99f), "Player should start with full sprint energy.");
