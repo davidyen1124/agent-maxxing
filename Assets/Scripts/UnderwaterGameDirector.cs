@@ -481,6 +481,8 @@ namespace Underwater
 
         public void BeginRealtimeVoiceQuestionFromPlayer()
         {
+            PauseRealtimeVoicePlayback();
+
             if (niaVoiceCaptureRoutine != null && !string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
             {
                 return;
@@ -518,6 +520,16 @@ namespace Underwater
 
             niaVoiceStopRequested = true;
             Microphone.End(niaVoiceDeviceName);
+        }
+
+        private void PauseRealtimeVoicePlayback()
+        {
+            if (niaVoiceAudioSource == null || !niaVoiceAudioSource.isPlaying)
+            {
+                return;
+            }
+
+            niaVoiceAudioSource.Pause();
         }
 
         private void ReloadApiSettings()
