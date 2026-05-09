@@ -1,6 +1,6 @@
-# Underwater
+# Forest
 
-Underwater is a Unity 6 project that turns Codex threads into a live 3D world. The current default scene is a terrain demo environment with first-person movement, 3D animal thread pets, speech bubbles above pets, a minimap, realtime atmosphere controls, and optional voice Q&A.
+Forest is a Unity 6 project that turns Codex threads into a live 3D world. The current default scene is a terrain demo environment with first-person movement, 3D thread animals, speech bubbles above animals, a minimap, realtime atmosphere controls, and optional voice Q&A.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ Underwater is a Unity 6 project that turns Codex threads into a live 3D world. T
    Assets/TerrainDemoScene_URP/Scenes/TerrainDemoScene.unity
    ```
 
-6. In a separate terminal, start the Codex app-server for live thread pets:
+6. Optional: in a separate terminal, start the Codex app-server for live thread pets:
 
    ```sh
    codex app-server --listen ws://127.0.0.1:4500
@@ -45,14 +45,14 @@ Underwater is a Unity 6 project that turns Codex threads into a live 3D world. T
 
 7. Press Play.
 
-The scene works without the Codex app-server, but live thread pets require the bridge to connect to `ws://127.0.0.1:4500`.
+The scene works without the Codex app-server. If the bridge does not receive a thread sync shortly after Play starts, Unity spawns local demo thread pets so the terrain scene still has animals. Live Codex thread data requires the bridge to connect to `ws://127.0.0.1:4500`.
 
 ## Optional Voice Setup
 
 Voice settings are read from:
 
 ```text
-UserSettings/UnderwaterApiSettings.json
+UserSettings/ForestApiSettings.json
 ```
 
 This file is local user state and should not be committed. Example:
@@ -86,17 +86,19 @@ This file is local user state and should not be committed. Example:
 - `Esc`: Unlock mouse cursor
 - Left click: Re-lock mouse cursor
 
-## How Thread Pets Work
+## How Thread Animals Work
 
-`AquariumDirectorBridge` connects to the local Codex app-server and mirrors active and archived threads into Unity snapshots. `UnderwaterGameDirector` owns the world lifecycle and creates one pet object for each thread.
+`ForestDirectorBridge` connects to the local Codex app-server and mirrors active and archived threads into Unity snapshots. `ForestGameDirector` owns the world lifecycle and creates one animal object for each thread.
 
-- Active threads use `ThreadPetAI`.
-- Archived threads use `ArchivedThreadPet`.
-- 3D animal visuals are created by `ThreadPetAnimalVisual`.
-- Animal prefabs live in `Assets/Resources/ThreadPetAnimals`.
+- Active threads use `ThreadAnimalAI`.
+- Archived threads use `ArchivedThreadAnimal`.
+- 3D animal visuals are created by `ThreadAnimalVisual`.
+- Animal prefabs live in `Assets/Resources/ThreadAnimals`.
 - Imported animal movement/input scripts are disabled at runtime; movement is controlled by our own AI components.
 
-Active pets roam around the terrain, choose targets near the player/camera/home point, sample terrain height through `UnderwaterGameDirector.GetSurfaceY(...)`, and drive imported animal Animator parameters directly. Archived pets idle and hop near their saved terrain position.
+Active animals roam around the terrain, choose targets near the player/camera/home point, sample terrain height through `ForestGameDirector.GetSurfaceY(...)`, and drive imported animal Animator parameters directly. Archived animals idle and hop near their saved terrain position.
+
+When the Codex app-server is not running, `ForestGameDirector` creates a small local demo thread set after a short fallback delay. Once the app-server sends a real sync, the real thread IDs replace the demo animals.
 
 ## Assets
 
@@ -106,7 +108,7 @@ Important runtime asset roots:
 
 - `Assets/TerrainDemoScene_URP`
 - `Assets/ithappy/Animals_FREE`
-- `Assets/Resources/ThreadPetAnimals`
+- `Assets/Resources/ThreadAnimals`
 
 If assets appear missing, run:
 
@@ -125,7 +127,7 @@ Window > General > Test Runner > PlayMode
 The main PlayMode test file is:
 
 ```text
-Assets/Tests/PlayMode/UnderwaterBootstrapPlayModeTests.cs
+Assets/Tests/PlayMode/ForestBootstrapPlayModeTests.cs
 ```
 
 For command-line runs, use a local Unity executable for version `6000.4.6f1`, for example:
@@ -136,18 +138,18 @@ For command-line runs, use a local Unity executable for version `6000.4.6f1`, fo
   -projectPath . \
   -runTests \
   -testPlatform PlayMode \
-  -testResults /tmp/underwater-playmode-results.xml \
+  -testResults /tmp/forest-playmode-results.xml \
   -quit
 ```
 
 ## Key Files
 
-- `Assets/Scripts/UnderwaterGameDirector.cs`: world lifecycle, terrain setup, player creation, UI, minimap, thread spawning, voice flow
-- `Assets/Scripts/AquariumDirectorBridge.cs`: Codex app-server websocket bridge
-- `Assets/Scripts/UnderwaterPlayerController.cs`: first-person movement and keyboard shortcuts
-- `Assets/Scripts/ThreadPetAI.cs`: active thread pet behavior
-- `Assets/Scripts/ArchivedThreadPet.cs`: archived thread pet behavior
-- `Assets/Scripts/ThreadPetAnimalVisual.cs`: 3D animal visual loading, scaling, animation, and imported component disabling
+- `Assets/Scripts/ForestGameDirector.cs`: world lifecycle, terrain setup, player creation, UI, minimap, thread spawning, voice flow
+- `Assets/Scripts/ForestDirectorBridge.cs`: Codex app-server websocket bridge
+- `Assets/Scripts/ForestPlayerController.cs`: first-person movement and keyboard shortcuts
+- `Assets/Scripts/ThreadAnimalAI.cs`: active thread animal behavior
+- `Assets/Scripts/ArchivedThreadAnimal.cs`: archived thread animal behavior
+- `Assets/Scripts/ThreadAnimalVisual.cs`: 3D animal visual loading, scaling, animation, and imported component disabling
 - `Assets/Scripts/OpenAIRealtimeClient.cs`: realtime voice client and tool handling
 - `Assets/Scripts/NiaApiClient.cs`: optional Nia search client
-- `Assets/Scripts/UnderwaterUserSettings.cs`: local user settings loader
+- `Assets/Scripts/ForestUserSettings.cs`: local user settings loader

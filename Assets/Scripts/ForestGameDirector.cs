@@ -31,6 +31,8 @@ namespace Forest
         private const float TerrainModeDaySunIntensity = 5f;
         private const float TerrainModeNightSunIntensity = 1.45f;
         private const float DefaultAtmosphereIntensity = 0.55f;
+        private const float DemoThreadFallbackDelaySeconds = 5f;
+        private const string DemoThreadSource = "demo-fallback";
 
         [SerializeField] private string defaultOpenAiRealtimeModel = "gpt-realtime-2";
         [SerializeField] private string defaultOpenAiRealtimeVoice = "marin";
@@ -74,6 +76,7 @@ namespace Forest
         private ForestUserSettings apiSettings;
         private OpenAIRealtimeClient realtimeClient;
         private Coroutine worldSyncRoutine;
+        private Coroutine demoThreadFallbackRoutine;
         private Coroutine niaVoiceCaptureRoutine;
         private QueuedWorldSync queuedWorldSync;
         private int snapshotSequence;
@@ -93,6 +96,7 @@ namespace Forest
         private float worldSyncProgress;
         private string worldSyncStatus = "Loading thread animals";
         private bool usingSceneTerrain;
+        private bool appServerThreadSyncReceived;
         private string atmosphereTimeOfDay = "day";
         private string atmosphereWeather = "clear";
         private float atmosphereIntensity = DefaultAtmosphereIntensity;
@@ -177,6 +181,7 @@ namespace Forest
             ReloadApiSettings();
             _ = WarmRealtimeVoiceSessionAsync();
             AttachForestBridge(true);
+            demoThreadFallbackRoutine = StartCoroutine(SpawnDemoThreadAnimalsIfNeeded());
         }
 
         private void Update()
@@ -197,6 +202,12 @@ namespace Forest
             if (realtimeClient != null)
             {
                 _ = realtimeClient.CloseAsync();
+            }
+
+            if (demoThreadFallbackRoutine != null)
+            {
+                StopCoroutine(demoThreadFallbackRoutine);
+                demoThreadFallbackRoutine = null;
             }
 
             if (Instance == this)
@@ -238,6 +249,11 @@ namespace Forest
 
         public void SyncThreadWorld(IReadOnlyList<ForestThreadSnapshot> threads, IReadOnlyList<ForestArchivedThreadSnapshot> syncedArchivedAnimals, string detail)
         {
+            if (!IsDemoThreadFallbackSync(threads, syncedArchivedAnimals, detail))
+            {
+                appServerThreadSyncReceived = true;
+            }
+
             QueuedWorldSync sync = new QueuedWorldSync
             {
                 threads = threads != null ? new List<ForestThreadSnapshot>(threads) : new List<ForestThreadSnapshot>(),
@@ -503,6 +519,147 @@ namespace Forest
             }
 
             return mutationCount;
+        }
+
+        private IEnumerator SpawnDemoThreadAnimalsIfNeeded()
+        {
+            yield return new WaitForSeconds(DemoThreadFallbackDelaySeconds);
+            demoThreadFallbackRoutine = null;
+
+            if (appServerThreadSyncReceived ||
+                ActiveThreadCount > 0 ||
+                ArchivedAnimalCount > 0 ||
+                (forestBridge != null && forestBridge.IsConnected))
+            {
+                yield break;
+            }
+
+            List<ForestThreadSnapshot> demoThreads = new List<ForestThreadSnapshot>
+            {
+                CreateDemoThreadSnapshot("demo-thread-1", "Review terrain lighting", "Walking the forest path", "working", 3f, -12f, 16f),
+                CreateDemoThreadSnapshot("demo-thread-2", "Tune thread pet behavior", "Testing animal animations", "responding", 9f, 14f, 10f),
+                CreateDemoThreadSnapshot("demo-thread-3", "Plan scene polish", "Waiting for app-server", "idle", 16f, 12f, -14f),
+                CreateDemoThreadSnapshot("demo-thread-4", "Document setup steps", "Ready for Codex bridge", "fresh", 1f, -18f, -10f)
+            };
+            List<ForestArchivedThreadSnapshot> demoArchivedAnimals = new List<ForestArchivedThreadSnapshot>
+            {
+                CreateDemoArchivedAnimalSnapshot("demo-archived-1", "Archived terrain experiment", "Archived", -24f, 18f),
+                CreateDemoArchivedAnimalSnapshot("demo-archived-2", "Old pet sprite pass", "Archived", 22f, -18f)
+            };
+            string detail = "Demo mode: app-server offline, showing local thread animals.";
+
+            SyncThreadWorld(demoThreads, demoArchivedAnimals, detail);
+            UpdateBridgeState("demo", detail);
+        }
+
+        private ForestThreadSnapshot CreateDemoThreadSnapshot(
+            string id,
+            string title,
+            string statusMessage,
+            string phase,
+            float ageMinutes,
+            float xOffset,
+            float zOffset)
+        {
+            Vector3 position = GetDemoAnimalPosition(xOffset, zOffset, 0.08f);
+
+            return new ForestThreadSnapshot
+            {
+                id = id,
+                title = title,
+                statusMessage = statusMessage,
+                phase = phase,
+                source = DemoThreadSource,
+                ageMinutes = ageMinutes,
+                position = SerializableVector3.FromVector3(position),
+                velocity = SerializableVector3.FromVector3(Vector3.zero)
+            };
+        }
+
+        private ForestArchivedThreadSnapshot CreateDemoArchivedAnimalSnapshot(
+            string id,
+            string title,
+            string statusMessage,
+            float xOffset,
+            float zOffset)
+        {
+            return new ForestArchivedThreadSnapshot
+            {
+                id = id,
+                title = title,
+                statusMessage = statusMessage,
+                position = SerializableVector3.FromVector3(GetDemoAnimalPosition(xOffset, zOffset, 0.08f))
+            };
+        }
+
+        private Vector3 GetDemoAnimalPosition(float xOffset, float zOffset, float groundOffset)
+        {
+            Vector3 origin = Player != null
+                ? Player.transform.position
+                : Camera.main != null
+                    ? Camera.main.transform.position
+                    : PlayBounds.center;
+            Vector3 position = ClampPoint(origin + new Vector3(xOffset, 0f, zOffset), 3f);
+            position.y = GetSurfaceY(position) + groundOffset;
+            return position;
+        }
+
+        private static bool IsDemoThreadFallbackSync(
+            IReadOnlyList<ForestThreadSnapshot> threads,
+            IReadOnlyList<ForestArchivedThreadSnapshot> syncedArchivedAnimals,
+            string detail)
+        {
+            bool hasDemoDetail = !string.IsNullOrWhiteSpace(detail) &&
+                detail.IndexOf("demo", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            if (!hasDemoDetail)
+            {
+                return false;
+            }
+
+            bool sawSnapshot = false;
+
+            if (threads != null)
+            {
+                for (int i = 0; i < threads.Count; i++)
+                {
+                    ForestThreadSnapshot snapshot = threads[i];
+
+                    if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.id))
+                    {
+                        continue;
+                    }
+
+                    sawSnapshot = true;
+
+                    if (!string.Equals(snapshot.source, DemoThreadSource, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            if (syncedArchivedAnimals != null)
+            {
+                for (int i = 0; i < syncedArchivedAnimals.Count; i++)
+                {
+                    ForestArchivedThreadSnapshot snapshot = syncedArchivedAnimals[i];
+
+                    if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.id))
+                    {
+                        continue;
+                    }
+
+                    sawSnapshot = true;
+
+                    if (!snapshot.id.StartsWith("demo-", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return sawSnapshot;
         }
 
         public void UpdateBridgeState(string state, string detail)

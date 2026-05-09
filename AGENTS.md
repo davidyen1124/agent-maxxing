@@ -10,28 +10,30 @@ This repo is a Unity 6 project. Treat Unity-generated YAML, `.meta` files, impor
 - Render pipeline: URP `17.4.0`
 - Input: Unity Input System package, not legacy `UnityEngine.Input`
 - Local Codex app-server websocket: `ws://127.0.0.1:4500`
-- Runtime namespace: `Underwater`
-- Main assembly: `Assets/Scripts/Underwater.Runtime.asmdef`
-- PlayMode test assembly: `Assets/Tests/PlayMode/Underwater.PlayModeTests.asmdef`
+- Runtime namespace: `Forest`
+- Main assembly: `Assets/Scripts/Forest.Runtime.asmdef`
+- PlayMode test assembly: `Assets/Tests/PlayMode/Forest.PlayModeTests.asmdef`
 
 ## Current Architecture
 
-`UnderwaterGameDirector` is the central runtime coordinator. It configures terrain mode, creates the player, owns thread pet lifecycle, renders IMGUI overlays, handles realtime voice, and applies realtime atmosphere changes.
+`ForestGameDirector` is the central runtime coordinator. It configures terrain mode, creates the player, owns thread animal lifecycle, renders IMGUI overlays, handles realtime voice, and applies realtime atmosphere changes.
 
-`AquariumDirectorBridge` connects to the local Codex app-server and converts app-server thread/archive events into Unity snapshots. It calls `UnderwaterGameDirector.SyncThreadWorld(...)`.
+`ForestDirectorBridge` connects to the local Codex app-server and converts app-server thread/archive events into Unity snapshots. It calls `ForestGameDirector.SyncThreadWorld(...)`.
+
+If the app-server is not running, `ForestGameDirector` spawns local demo thread animals after a short fallback delay. Demo snapshots use the `demo-fallback` source and `demo-*` IDs so a later real app-server sync can replace them cleanly.
 
 Thread pets are split into behavior and visual layers:
 
-- `ThreadPetAI`: active thread movement, terrain following, target selection, status/phase mapping
-- `ArchivedThreadPet`: archived thread idle/hop behavior
-- `ThreadPetAnimalVisual`: deterministic 3D animal selection, prefab instantiation, scale/grounding, Animator parameter updates
+- `ThreadAnimalAI`: active thread movement, terrain following, target selection, status/phase mapping
+- `ArchivedThreadAnimal`: archived thread idle/hop behavior
+- `ThreadAnimalVisual`: deterministic 3D animal selection, prefab instantiation, scale/grounding, Animator parameter updates
 
 The old 2D sprite pet system was removed. Do not reintroduce `CodexPetCatalog`, `CodexPetSpriteAnimator`, or `Assets/StreamingAssets/CodexPets`.
 
 3D animal prefabs live in:
 
 ```text
-Assets/Resources/ThreadPetAnimals
+Assets/Resources/ThreadAnimals
 ```
 
 Their source package assets live in:
@@ -40,11 +42,11 @@ Their source package assets live in:
 Assets/ithappy/Animals_FREE
 ```
 
-`ThreadPetAnimalVisual` intentionally disables imported movement/input components such as `MovePlayerInput`, `CreatureMover`, and `CharacterController` at runtime. Our code owns movement.
+`ThreadAnimalVisual` intentionally disables imported movement/input components such as `MovePlayerInput`, `CreatureMover`, and `CharacterController` at runtime. Our code owns movement.
 
 ## Player And Controls
 
-`UnderwaterPlayerController` owns first-person controls:
+`ForestPlayerController` owns first-person controls:
 
 - `W/A/S/D`: move
 - Mouse: look
@@ -59,7 +61,7 @@ Do not use legacy `UnityEngine.Input`; this project uses `UnityEngine.InputSyste
 
 ## UI Notes
 
-HUD rendering is IMGUI in `UnderwaterGameDirector.OnGUI()`.
+HUD rendering is IMGUI in `ForestGameDirector.OnGUI()`.
 
 - `DrawMiniMap()` renders the minimap.
 - `DrawThreadNameTags()` renders pet speech bubbles.
@@ -67,12 +69,12 @@ HUD rendering is IMGUI in `UnderwaterGameDirector.OnGUI()`.
 
 Pet bubble text comes from:
 
-- `ThreadPetAI.BubbleMessage`
-- `ArchivedThreadPet.StatusMessage`
+- `ThreadAnimalAI.BubbleMessage`
+- `ArchivedThreadAnimal.StatusMessage`
 
 ## Terrain And Movement
 
-Terrain mode is detected/configured in `UnderwaterGameDirector`.
+Terrain mode is detected/configured in `ForestGameDirector`.
 
 Important helpers:
 
@@ -89,10 +91,10 @@ Active pets use terrain-grounded movement when `director.UsesSceneTerrain` is tr
 Optional voice/search settings are loaded from:
 
 ```text
-UserSettings/UnderwaterApiSettings.json
+UserSettings/ForestApiSettings.json
 ```
 
-This file may contain API keys and must not be committed. Expected fields are defined in `UnderwaterUserSettings`.
+This file may contain API keys and must not be committed. Expected fields are defined in `ForestUserSettings`.
 
 OpenAI realtime voice is handled by `OpenAIRealtimeClient`. Optional external search is handled by `NiaApiClient`.
 
@@ -115,7 +117,7 @@ If asset files look like tiny pointer files in Unity, run `git lfs pull`.
 Primary PlayMode tests:
 
 ```text
-Assets/Tests/PlayMode/UnderwaterBootstrapPlayModeTests.cs
+Assets/Tests/PlayMode/ForestBootstrapPlayModeTests.cs
 ```
 
 Run from Unity Test Runner or from a local Unity executable:
@@ -126,7 +128,7 @@ Run from Unity Test Runner or from a local Unity executable:
   -projectPath . \
   -runTests \
   -testPlatform PlayMode \
-  -testResults /tmp/underwater-playmode-results.xml \
+  -testResults /tmp/forest-playmode-results.xml \
   -quit
 ```
 
@@ -145,8 +147,7 @@ Prefer focused commits. Do not stage unrelated Unity editor churn from `ProjectS
 ## Practical Warnings
 
 - Do not delete `.meta` files for assets that remain in the project.
-- Do not commit `UserSettings/UnderwaterApiSettings.json`.
+- Do not commit `UserSettings/ForestApiSettings.json`.
 - Do not use destructive git commands unless explicitly requested.
-- Keep runtime animal prefabs under `Assets/Resources/ThreadPetAnimals`; `Resources.Load` depends on that path.
+- Keep runtime animal prefabs under `Assets/Resources/ThreadAnimals`; `Resources.Load` depends on that path.
 - Imported asset YAML often contains trailing whitespace. Avoid broad mechanical whitespace rewrites across imported Unity assets unless the user asks.
-
