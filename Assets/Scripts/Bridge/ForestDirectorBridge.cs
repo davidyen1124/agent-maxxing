@@ -1240,23 +1240,6 @@ namespace Forest
             return cleaned.Substring(0, Mathf.Max(0, maxLength - 3)).TrimEnd() + "...";
         }
 
-        private static string Shorten(string value, int maxLength)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return string.Empty;
-            }
-
-            string trimmed = value.Trim();
-
-            if (trimmed.Length <= maxLength)
-            {
-                return trimmed;
-            }
-
-            return trimmed.Substring(0, Mathf.Max(0, maxLength - 3)).TrimEnd() + "...";
-        }
-
         private static DateTime? ReadUnixTimestampSeconds(Dictionary<string, object> root, string key)
         {
             if (root == null || !root.TryGetValue(key, out object value))
@@ -1523,7 +1506,7 @@ namespace Forest
                 mirroredArchivedAnimals[threadId] = new ForestArchivedThreadSnapshot
                 {
                     id = threadId,
-                    title = Shorten(threadId, 12),
+                    title = ForestText.Shorten(threadId, 12),
                     statusMessage = "Archived"
                 };
             }
@@ -1626,7 +1609,7 @@ namespace Forest
             record = new AppServerThreadRecord
             {
                 id = threadId.Trim(),
-                title = Shorten(threadId, 12),
+                title = ForestText.Shorten(threadId, 12),
                 statusMessage = "Idle",
                 phase = "idle",
                 updatedAtUtc = DateTime.UtcNow,

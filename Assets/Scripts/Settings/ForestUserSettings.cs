@@ -4,6 +4,7 @@ using UnityEngine;
 
 namespace Forest
 {
+#pragma warning disable 0649
     [Serializable]
     internal sealed class ForestUserSettings
     {
@@ -59,4 +60,5 @@ namespace Forest
             return voiceMaxCaptureSeconds > 0f ? voiceMaxCaptureSeconds : defaultValue;
         }
     }
+#pragma warning restore 0649
 }

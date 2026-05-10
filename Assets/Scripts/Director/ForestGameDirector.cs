@@ -12,10 +12,8 @@ using Random = UnityEngine.Random;
 
 namespace Forest
 {
-    public sealed class ForestGameDirector : MonoBehaviour
+    public sealed partial class ForestGameDirector : MonoBehaviour
     {
-        private const string UnderwaterTaskTitlePrefix = "Underwater task ";
-        private const string UnderwaterTaskCounterPrefsKey = "Underwater.UnderwaterTask.NextThreadNumber";
         private const float TerrainModeMaxCameraFarClip = 2200f;
         private const float TerrainModeMinCameraFarClip = 900f;
         private const float TerrainModeShadowDistance = 90f;
@@ -36,8 +34,8 @@ namespace Forest
         [SerializeField] private int defaultVoiceSampleRate = 24000;
         [SerializeField] private float defaultVoiceMaxCaptureSeconds = 8f;
 
-        private readonly Dictionary<string, ThreadAnimalAI> activeThreads = new Dictionary<string, ThreadAnimalAI>();
-        private readonly Dictionary<string, ArchivedThreadAnimal> archivedAnimals = new Dictionary<string, ArchivedThreadAnimal>();
+        private readonly Dictionary<string, ActiveThreadAnimalController> activeThreads = new Dictionary<string, ActiveThreadAnimalController>();
+        private readonly Dictionary<string, ArchivedThreadAnimalController> archivedAnimals = new Dictionary<string, ArchivedThreadAnimalController>();
         private readonly ConcurrentQueue<AtmosphereCommand> pendingAtmosphereCommands = new ConcurrentQueue<AtmosphereCommand>();
         private readonly ConcurrentQueue<WorkThreadCommand> pendingWorkThreadCommands = new ConcurrentQueue<WorkThreadCommand>();
 
@@ -290,14 +288,14 @@ namespace Forest
 
                     liveIds.Add(snapshot.id);
 
-                    if (activeThreads.TryGetValue(snapshot.id, out ThreadAnimalAI existing))
+                    if (activeThreads.TryGetValue(snapshot.id, out ActiveThreadAnimalController existing))
                     {
                         existing.ApplySnapshot(snapshot);
                     }
                     else
                     {
                         GameObject threadObject = new GameObject($"Thread {snapshot.id}");
-                        ThreadAnimalAI threadAnimal = threadObject.AddComponent<ThreadAnimalAI>();
+                        ActiveThreadAnimalController threadAnimal = threadObject.AddComponent<ActiveThreadAnimalController>();
 
                         if (threadAnimal.Initialize(this, snapshot))
                         {
@@ -316,7 +314,7 @@ namespace Forest
 
             List<string> staleActiveIds = new List<string>();
 
-            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ActiveThreadAnimalController> pair in activeThreads)
             {
                 if (!liveIds.Contains(pair.Key))
                 {
@@ -329,7 +327,7 @@ namespace Forest
                 string id = staleActiveIds[i];
                 completedWork++;
 
-                if (activeThreads.TryGetValue(id, out ThreadAnimalAI threadAnimal))
+                if (activeThreads.TryGetValue(id, out ActiveThreadAnimalController threadAnimal))
                 {
                     if (threadAnimal != null)
                     {
@@ -369,7 +367,7 @@ namespace Forest
                     }
 
                     GameObject archivedAnimalObject = new GameObject($"Archived Animal {snapshot.id}");
-                    ArchivedThreadAnimal archivedAnimal = archivedAnimalObject.AddComponent<ArchivedThreadAnimal>();
+                    ArchivedThreadAnimalController archivedAnimal = archivedAnimalObject.AddComponent<ArchivedThreadAnimalController>();
 
                     if (archivedAnimal.Initialize(this, snapshot))
                     {
@@ -387,7 +385,7 @@ namespace Forest
 
             List<string> staleArchivedIds = new List<string>();
 
-            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
+            foreach (KeyValuePair<string, ArchivedThreadAnimalController> pair in archivedAnimals)
             {
                 if (!archivedIds.Contains(pair.Key))
                 {
@@ -400,7 +398,7 @@ namespace Forest
                 string id = staleArchivedIds[i];
                 completedWork++;
 
-                if (archivedAnimals.TryGetValue(id, out ArchivedThreadAnimal archivedAnimal))
+                if (archivedAnimals.TryGetValue(id, out ArchivedThreadAnimalController archivedAnimal))
                 {
                     if (archivedAnimal != null)
                     {
@@ -417,7 +415,7 @@ namespace Forest
             directorStatusLine = string.IsNullOrWhiteSpace(sync.detail)
                 ? $"Synced {ActiveThreadCount} roaming threads and {ArchivedAnimalCount} archived animals."
                 : sync.detail;
-            PersistNextWorkThreadNumber(FindHighestExistingUnderwaterTaskNumber() + 1);
+            PersistNextWorkThreadNumber(FindHighestExistingWorkThreadNumber() + 1);
             UpdateNearestThreadStatus();
             SetWorldSyncProgress(totalWork, Mathf.Max(1, totalWork), "Thread animals ready");
             worldSyncLoading = false;
@@ -618,7 +616,7 @@ namespace Forest
             catch (Exception ex)
             {
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                Debug.LogWarning($"Realtime voice warm-up unavailable: {Shorten(message, 96)}");
+                Debug.LogWarning($"Realtime voice warm-up unavailable: {ForestText.Shorten(message, 96)}");
             }
         }
 
@@ -626,7 +624,7 @@ namespace Forest
         {
             List<ForestThreadSnapshot> threadSnapshots = new List<ForestThreadSnapshot>(activeThreads.Count);
 
-            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ActiveThreadAnimalController> pair in activeThreads)
             {
                 if (pair.Value != null)
                 {
@@ -636,7 +634,7 @@ namespace Forest
 
             List<ForestArchivedThreadSnapshot> archivedAnimalSnapshots = new List<ForestArchivedThreadSnapshot>(archivedAnimals.Count);
 
-            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
+            foreach (KeyValuePair<string, ArchivedThreadAnimalController> pair in archivedAnimals)
             {
                 if (pair.Value != null)
                 {
@@ -772,7 +770,7 @@ namespace Forest
                 padding = new RectOffset(16, 16, 9, 9),
                 border = new RectOffset(14, 14, 14, 14)
             };
-            speechBubbleStyle.normal.background = CreateRoundedRectTexture(
+            speechBubbleStyle.normal.background = HudTextureFactory.CreateRoundedRect(
                 40,
                 40,
                 14f,
@@ -784,7 +782,7 @@ namespace Forest
             {
                 border = new RectOffset(16, 16, 16, 16)
             };
-            speechBubbleShadowStyle.normal.background = CreateRoundedRectTexture(
+            speechBubbleShadowStyle.normal.background = HudTextureFactory.CreateRoundedRect(
                 44,
                 44,
                 16f,
@@ -817,14 +815,14 @@ namespace Forest
                 normal = { textColor = new Color(0.92f, 1f, 1f, 0.96f) }
             };
 
-            miniMapFrameTexture = CreateMiniMapFrameTexture(
+            miniMapFrameTexture = HudTextureFactory.CreateMiniMapFrame(
                 192,
                 new Color(0.01f, 0.07f, 0.08f, 0.42f),
                 new Color(0f, 0.01f, 0.015f, 0.38f),
                 new Color(0.28f, 0.96f, 1f, 0.86f),
                 2f);
-            miniMapPlayerDotTexture = CreateCircleTexture(22, new Color(0.96f, 0.98f, 0.96f, 1f), new Color(0.12f, 0.18f, 0.18f, 0.86f), 1.5f);
-            miniMapOtherDotTexture = CreateCircleTexture(14, new Color(0.25f, 1f, 0.96f, 0.96f), new Color(0.73f, 1f, 1f, 0.82f), 1f);
+            miniMapPlayerDotTexture = HudTextureFactory.CreateCircle(22, new Color(0.96f, 0.98f, 0.96f, 1f), new Color(0.12f, 0.18f, 0.18f, 0.86f), 1.5f);
+            miniMapOtherDotTexture = HudTextureFactory.CreateCircle(14, new Color(0.25f, 1f, 0.96f, 0.96f), new Color(0.73f, 1f, 1f, 0.82f), 1f);
         }
 
         private void DrawMiniMap()
@@ -839,7 +837,7 @@ namespace Forest
             GUI.DrawTexture(panelRect, miniMapFrameTexture);
             DrawMiniMapCompassLabels(center, radius + 12f);
 
-            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ActiveThreadAnimalController> pair in activeThreads)
             {
                 if (pair.Value != null)
                 {
@@ -847,7 +845,7 @@ namespace Forest
                 }
             }
 
-            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
+            foreach (KeyValuePair<string, ArchivedThreadAnimalController> pair in archivedAnimals)
             {
                 if (pair.Value != null)
                 {
@@ -943,138 +941,6 @@ namespace Forest
             GUI.DrawTexture(new Rect(center.x - size * 0.5f, center.y - size * 0.5f, size, size), texture);
         }
 
-        private static Texture2D CreateRoundedRectTexture(int width, int height, float radius, Color fillColor, Color borderColor, float borderWidth)
-        {
-            Texture2D texture = new Texture2D(width, height, TextureFormat.RGBA32, false)
-            {
-                name = "Forest Speech Bubble"
-            };
-            Color clear = new Color(1f, 1f, 1f, 0f);
-            float maxX = width - 1f;
-            float maxY = height - 1f;
-
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    float distanceFromEdge = Mathf.Min(Mathf.Min(x, maxX - x), Mathf.Min(y, maxY - y));
-                    float cornerX = x < radius ? radius : maxX - x < radius ? maxX - radius : x;
-                    float cornerY = y < radius ? radius : maxY - y < radius ? maxY - radius : y;
-                    float cornerDistance = Vector2.Distance(new Vector2(x, y), new Vector2(cornerX, cornerY));
-
-                    if (cornerDistance > radius)
-                    {
-                        texture.SetPixel(x, y, clear);
-                    }
-                    else if (borderWidth > 0f && (distanceFromEdge < borderWidth || cornerDistance > radius - borderWidth))
-                    {
-                        texture.SetPixel(x, y, borderColor);
-                    }
-                    else
-                    {
-                        texture.SetPixel(x, y, fillColor);
-                    }
-                }
-            }
-
-            texture.Apply();
-            return texture;
-        }
-
-        private static Texture2D CreateCircleTexture(int size, Color fillColor, Color borderColor, float borderWidth)
-        {
-            Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
-            {
-                name = "Forest Mini Map Dot"
-            };
-            Color clear = new Color(1f, 1f, 1f, 0f);
-            float center = (size - 1f) * 0.5f;
-            float radius = center;
-            float innerRadius = Mathf.Max(0f, radius - borderWidth);
-
-            for (int y = 0; y < size; y++)
-            {
-                for (int x = 0; x < size; x++)
-                {
-                    float distance = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
-
-                    if (distance > radius)
-                    {
-                        texture.SetPixel(x, y, clear);
-                    }
-                    else if (distance >= innerRadius)
-                    {
-                        texture.SetPixel(x, y, borderColor);
-                    }
-                    else
-                    {
-                        texture.SetPixel(x, y, fillColor);
-                    }
-                }
-            }
-
-            texture.Apply();
-            return texture;
-        }
-
-        private static Texture2D CreateMiniMapFrameTexture(int size, Color fillColor, Color edgeShadeColor, Color arcColor, float arcWidth)
-        {
-            Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
-            {
-                name = "Forest Mini Map Frame"
-            };
-            Color clear = new Color(1f, 1f, 1f, 0f);
-            float center = (size - 1f) * 0.5f;
-            float outerRadius = center;
-            float innerArcRadius = Mathf.Max(0f, outerRadius - arcWidth);
-            float edgeShadeRadius = Mathf.Max(0f, outerRadius - 11f);
-
-            for (int y = 0; y < size; y++)
-            {
-                for (int x = 0; x < size; x++)
-                {
-                    float distance = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
-
-                    if (distance > outerRadius)
-                    {
-                        texture.SetPixel(x, y, clear);
-                    }
-                    else if (distance >= innerArcRadius)
-                    {
-                        texture.SetPixel(x, y, arcColor);
-                    }
-                    else if (distance >= edgeShadeRadius)
-                    {
-                        texture.SetPixel(x, y, edgeShadeColor);
-                    }
-                    else
-                    {
-                        texture.SetPixel(x, y, fillColor);
-                    }
-                }
-            }
-
-            texture.Apply();
-            return texture;
-        }
-
-        private static string Shorten(string text, int maxLength)
-        {
-            if (string.IsNullOrWhiteSpace(text) || maxLength < 4)
-            {
-                return string.Empty;
-            }
-
-            string trimmed = text.Trim();
-
-            if (trimmed.Length <= maxLength)
-            {
-                return trimmed;
-            }
-
-            return trimmed.Substring(0, maxLength - 3) + "...";
-        }
-
         private void DrawThreadNameTags()
         {
             Camera camera = Camera.main;
@@ -1084,29 +950,29 @@ namespace Forest
                 return;
             }
 
-            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ActiveThreadAnimalController> pair in activeThreads)
             {
-                ThreadAnimalAI thread = pair.Value;
+                ActiveThreadAnimalController thread = pair.Value;
 
                 if (thread == null)
                 {
                     continue;
                 }
 
-                string message = Shorten(thread.BubbleMessage, 64);
+                string message = ForestText.Shorten(thread.BubbleMessage, 64);
                 DrawNameTag(camera, message, thread.BubbleAnchorWorldPosition);
             }
 
-            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
+            foreach (KeyValuePair<string, ArchivedThreadAnimalController> pair in archivedAnimals)
             {
-                ArchivedThreadAnimal archivedAnimal = pair.Value;
+                ArchivedThreadAnimalController archivedAnimal = pair.Value;
 
                 if (archivedAnimal == null)
                 {
                     continue;
                 }
 
-                string message = Shorten(archivedAnimal.StatusMessage, 64);
+                string message = ForestText.Shorten(archivedAnimal.StatusMessage, 64);
                 DrawNameTag(camera, message, archivedAnimal.transform.position + Vector3.up * 1.05f);
             }
         }
@@ -1193,13 +1059,13 @@ namespace Forest
                 return;
             }
 
-            ThreadAnimalAI nearest = null;
+            ActiveThreadAnimalController nearest = null;
             float nearestDistance = float.MaxValue;
             Vector3 playerPosition = Player.transform.position;
 
-            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ActiveThreadAnimalController> pair in activeThreads)
             {
-                ThreadAnimalAI thread = pair.Value;
+                ActiveThreadAnimalController thread = pair.Value;
 
                 if (thread == null)
                 {
@@ -1241,12 +1107,12 @@ namespace Forest
             summary.Append(BuildAtmosphereSummary());
             summary.Append(". ");
 
-            ThreadAnimalAI nearest = null;
+            ActiveThreadAnimalController nearest = null;
             float nearestDistance = float.MaxValue;
 
-            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ActiveThreadAnimalController> pair in activeThreads)
             {
-                ThreadAnimalAI thread = pair.Value;
+                ActiveThreadAnimalController thread = pair.Value;
 
                 if (thread == null)
                 {
@@ -1300,9 +1166,9 @@ namespace Forest
 
             List<FacingAnimalContext> facingAnimals = new List<FacingAnimalContext>();
 
-            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ActiveThreadAnimalController> pair in activeThreads)
             {
-                ThreadAnimalAI thread = pair.Value;
+                ActiveThreadAnimalController thread = pair.Value;
 
                 if (thread == null)
                 {
@@ -1320,9 +1186,9 @@ namespace Forest
                     forward);
             }
 
-            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
+            foreach (KeyValuePair<string, ArchivedThreadAnimalController> pair in archivedAnimals)
             {
-                ArchivedThreadAnimal archivedAnimal = pair.Value;
+                ArchivedThreadAnimalController archivedAnimal = pair.Value;
 
                 if (archivedAnimal == null)
                 {
@@ -1492,40 +1358,10 @@ namespace Forest
                 yield break;
             }
 
-            float[] monoSamples = ExtractMonoSamples(clip, recordedSamples);
+            float[] monoSamples = AudioSampleUtility.ExtractMonoSamples(clip, recordedSamples);
             SetRealtimeVoiceStatus("Asking Underwater...");
             LogRealtimeVoice($"Captured audio ready. recordedSamples={recordedSamples}, monoSamples={monoSamples.Length}, sampleRate={sampleRate}");
             _ = RequestRealtimeVoiceQuestionAsync(monoSamples, sampleRate);
-        }
-
-        private static float[] ExtractMonoSamples(AudioClip clip, int sampleCount)
-        {
-            int channels = Mathf.Max(1, clip.channels);
-            int clampedSampleCount = Mathf.Clamp(sampleCount, 0, clip.samples);
-            float[] interleaved = new float[clampedSampleCount * channels];
-            clip.GetData(interleaved, 0);
-
-            if (channels == 1)
-            {
-                return interleaved;
-            }
-
-            float[] mono = new float[clampedSampleCount];
-
-            for (int sample = 0; sample < clampedSampleCount; sample++)
-            {
-                float sum = 0f;
-                int offset = sample * channels;
-
-                for (int channel = 0; channel < channels; channel++)
-                {
-                    sum += interleaved[offset + channel];
-                }
-
-                mono[sample] = sum / channels;
-            }
-
-            return mono;
         }
 
         private string BuildRealtimeAnswerInstructions()
@@ -1578,15 +1414,15 @@ namespace Forest
                 SetRealtimeVoiceStatus("Speaking answer.", false);
                 SetLastAgentAction(string.IsNullOrWhiteSpace(result.Transcript)
                     ? "Voice answer received."
-                    : $"Voice answer: {Shorten(result.Transcript, 96)}");
+                    : $"Voice answer: {ForestText.Shorten(result.Transcript, 96)}");
                 LogRealtimeVoice($"Realtime answer received. outputSamples={result.Samples.Length}, sampleRate={result.SampleRate}, transcriptPresent={!string.IsNullOrWhiteSpace(result.Transcript)}");
                 PlayRealtimeVoiceAudio(result);
             }
             catch (Exception ex)
             {
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                SetRealtimeVoiceStatus($"Voice failed: {Shorten(message, 80)}");
-                Debug.LogWarning($"Voice question unavailable: {Shorten(message, 96)}");
+                SetRealtimeVoiceStatus($"Voice failed: {ForestText.Shorten(message, 80)}");
+                Debug.LogWarning($"Voice question unavailable: {ForestText.Shorten(message, 96)}");
             }
             finally
             {
@@ -1627,7 +1463,7 @@ namespace Forest
 
         private string HandleRealtimeWorkThreadCommand(Dictionary<string, object> arguments)
         {
-            string request = CleanRealtimeThreadRequest(ReadCommandString(arguments, "request", "question", "prompt"));
+            string request = RealtimeCommandParser.CleanWorkThreadRequest(RealtimeCommandParser.ReadString(arguments, "request", "question", "prompt"));
 
             if (string.IsNullOrWhiteSpace(request))
             {
@@ -1653,8 +1489,8 @@ namespace Forest
                 });
             }
 
-            string title = CleanRealtimeThreadTitle(
-                ReadCommandString(arguments, "title", "suggested_title", "summary"),
+            string title = RealtimeCommandParser.CleanWorkThreadTitle(
+                RealtimeCommandParser.ReadString(arguments, "title", "suggested_title", "summary"),
                 request);
 
             pendingWorkThreadCommands.Enqueue(new WorkThreadCommand
@@ -1676,14 +1512,14 @@ namespace Forest
         {
             AtmosphereCommand command = new AtmosphereCommand
             {
-                timeOfDay = NormalizeTimeOfDayOption(
-                    ReadCommandString(arguments, "time_of_day", "timeOfDay", "time"),
+                timeOfDay = RealtimeCommandParser.NormalizeTimeOfDay(
+                    RealtimeCommandParser.ReadString(arguments, "time_of_day", "timeOfDay", "time"),
                     atmosphereTimeOfDay),
-                weather = NormalizeWeatherOption(
-                    ReadCommandString(arguments, "weather", "condition"),
+                weather = RealtimeCommandParser.NormalizeWeather(
+                    RealtimeCommandParser.ReadString(arguments, "weather", "condition"),
                     atmosphereWeather),
-                intensity = Mathf.Clamp01(ReadCommandFloat(arguments, "intensity", DefaultAtmosphereIntensity)),
-                mood = CleanAtmosphereMood(ReadCommandString(arguments, "mood", "style"))
+                intensity = Mathf.Clamp01(RealtimeCommandParser.ReadFloat(arguments, "intensity", DefaultAtmosphereIntensity)),
+                mood = RealtimeCommandParser.CleanAtmosphereMood(RealtimeCommandParser.ReadString(arguments, "mood", "style"))
             };
 
             pendingAtmosphereCommands.Enqueue(command);
@@ -1722,7 +1558,7 @@ namespace Forest
 
                 int nextThreadNumber = GetNextPersistentWorkThreadNumber();
                 string title = string.IsNullOrWhiteSpace(command.title)
-                    ? CreateUnderwaterTaskTitle(nextThreadNumber)
+                    ? WorkThreadTitlePolicy.CreateDefaultTitle(nextThreadNumber)
                     : command.title.Trim();
                 string prompt = BuildWorkThreadPrompt(title, command.request);
 
@@ -2425,250 +2261,6 @@ namespace Forest
             }
         }
 
-        private static string NormalizeTimeOfDayOption(string value, string currentValue)
-        {
-            string normalized = NormalizeCommandToken(value);
-
-            if (ShouldPreserveOption(normalized))
-            {
-                return currentValue;
-            }
-
-            switch (normalized)
-            {
-                case "dawn":
-                case "morning":
-                case "earlymorning":
-                case "sunrise":
-                case "daybreak":
-                case "firstlight":
-                    return "dawn";
-                case "day":
-                case "daylight":
-                case "daytime":
-                case "noon":
-                case "midday":
-                case "afternoon":
-                case "sunny":
-                case "bright":
-                    return "day";
-                case "sunset":
-                case "evening":
-                case "dusk":
-                case "twilight":
-                case "goldenhour":
-                case "sundown":
-                    return "sunset";
-                case "night":
-                case "nighttime":
-                case "midnight":
-                case "moonlight":
-                case "moonlit":
-                case "dark":
-                    return "night";
-                default:
-                    return currentValue;
-            }
-        }
-
-        private static string NormalizeWeatherOption(string value, string currentValue)
-        {
-            string normalized = NormalizeCommandToken(value);
-
-            if (ShouldPreserveOption(normalized))
-            {
-                return currentValue;
-            }
-
-            switch (normalized)
-            {
-                case "clear":
-                case "clearsky":
-                case "sunny":
-                case "sunshine":
-                case "nice":
-                case "calm":
-                    return "clear";
-                case "fog":
-                case "foggy":
-                case "mist":
-                case "misty":
-                case "haze":
-                case "hazy":
-                case "cloudy":
-                case "clouds":
-                case "overcast":
-                case "smoky":
-                    return "fog";
-                case "rain":
-                case "rainy":
-                case "drizzle":
-                case "drizzly":
-                case "shower":
-                case "showers":
-                case "downpour":
-                case "pouring":
-                case "wet":
-                    return "rain";
-                case "storm":
-                case "stormy":
-                case "thunder":
-                case "thunderstorm":
-                case "lightning":
-                case "tempest":
-                case "squall":
-                    return "storm";
-                case "snow":
-                case "snowy":
-                case "snowing":
-                case "flurry":
-                case "flurries":
-                case "blizzard":
-                case "sleet":
-                case "hail":
-                case "icy":
-                case "frost":
-                    return "snow";
-                default:
-                    return currentValue;
-            }
-        }
-
-        private static string NormalizeCommandToken(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return string.Empty;
-            }
-
-            return value.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty).Replace(" ", string.Empty);
-        }
-
-        private static bool ShouldPreserveOption(string normalized)
-        {
-            return string.IsNullOrEmpty(normalized)
-                || normalized == "preserve"
-                || normalized == "same"
-                || normalized == "current"
-                || normalized == "unchanged";
-        }
-
-        private static string CleanAtmosphereMood(string mood)
-        {
-            if (string.IsNullOrWhiteSpace(mood))
-            {
-                return "calm";
-            }
-
-            return Shorten(mood.Trim().ToLowerInvariant(), 32);
-        }
-
-        private static string CleanRealtimeThreadRequest(string request)
-        {
-            return Shorten(CollapseWhitespace(request), 360);
-        }
-
-        private static string CleanRealtimeThreadTitle(string title, string request)
-        {
-            string candidate = CollapseWhitespace(title);
-
-            if (string.IsNullOrWhiteSpace(candidate))
-            {
-                candidate = CollapseWhitespace(request);
-            }
-
-            if (string.IsNullOrWhiteSpace(candidate))
-            {
-                return string.Empty;
-            }
-
-            candidate = candidate.Trim().TrimEnd('.', '?', '!');
-
-            const string underwaterPrefix = "Underwater:";
-
-            if (candidate.StartsWith(underwaterPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                candidate = candidate.Substring(underwaterPrefix.Length).Trim();
-            }
-
-            return Shorten(candidate, 72);
-        }
-
-        private static string CollapseWhitespace(string value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return string.Empty;
-            }
-
-            StringBuilder builder = new StringBuilder(value.Length);
-            bool pendingSpace = false;
-
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-
-                if (char.IsWhiteSpace(c))
-                {
-                    pendingSpace = builder.Length > 0;
-                    continue;
-                }
-
-                if (pendingSpace)
-                {
-                    builder.Append(' ');
-                    pendingSpace = false;
-                }
-
-                builder.Append(c);
-            }
-
-            return builder.ToString().Trim();
-        }
-
-        private static string ReadCommandString(Dictionary<string, object> arguments, params string[] names)
-        {
-            if (arguments == null)
-            {
-                return null;
-            }
-
-            for (int i = 0; i < names.Length; i++)
-            {
-                if (arguments.TryGetValue(names[i], out object value) && value != null)
-                {
-                    return value as string ?? Convert.ToString(value);
-                }
-            }
-
-            return null;
-        }
-
-        private static float ReadCommandFloat(Dictionary<string, object> arguments, string name, float defaultValue)
-        {
-            if (arguments == null || !arguments.TryGetValue(name, out object value) || value == null)
-            {
-                return defaultValue;
-            }
-
-            if (value is float floatValue)
-            {
-                return floatValue;
-            }
-
-            if (value is double doubleValue)
-            {
-                return (float)doubleValue;
-            }
-
-            if (value is int intValue)
-            {
-                return intValue;
-            }
-
-            return float.TryParse(Convert.ToString(value), out float parsed) ? parsed : defaultValue;
-        }
-
         private async Task CreateWorkThreadFromWorldAsync(string title, string prompt, int workThreadNumber)
         {
             try
@@ -2677,14 +2269,14 @@ namespace Forest
                 spawnedWorkThreadCount++;
                 PersistNextWorkThreadNumber(workThreadNumber + 1);
                 workThreadSpawnInFlight = false;
-                SetWorkThreadStatus($"Created '{title}' ({Shorten(threadId, 8)}).");
+                SetWorkThreadStatus($"Created '{title}' ({ForestText.Shorten(threadId, 8)}).");
                 directorStatusLine = "Spawned a Codex work thread from Underwater.";
             }
             catch (Exception ex)
             {
                 workThreadSpawnInFlight = false;
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                SetWorkThreadStatus($"Could not spawn work thread: {Shorten(message, 72)}");
+                SetWorkThreadStatus($"Could not spawn work thread: {ForestText.Shorten(message, 72)}");
                 UpdateBridgeState(forestBridge != null && forestBridge.IsConnected ? "warning" : "offline", workThreadStatusLine);
             }
         }
@@ -2737,8 +2329,8 @@ namespace Forest
 
         private int GetNextPersistentWorkThreadNumber()
         {
-            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(UnderwaterTaskCounterPrefsKey, 1));
-            int worldNextNumber = FindHighestExistingUnderwaterTaskNumber() + 1;
+            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(WorkThreadTitlePolicy.NextTitleNumberPrefsKey, 1));
+            int worldNextNumber = FindHighestExistingWorkThreadNumber() + 1;
             int sessionNextNumber = spawnedWorkThreadCount + 1;
             return Mathf.Max(savedNextNumber, worldNextNumber, sessionNextNumber);
         }
@@ -2746,63 +2338,38 @@ namespace Forest
         private void PersistNextWorkThreadNumber(int nextNumber)
         {
             int normalizedNextNumber = Mathf.Max(1, nextNumber);
-            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(UnderwaterTaskCounterPrefsKey, 1));
+            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(WorkThreadTitlePolicy.NextTitleNumberPrefsKey, 1));
 
             if (normalizedNextNumber <= savedNextNumber)
             {
                 return;
             }
 
-            PlayerPrefs.SetInt(UnderwaterTaskCounterPrefsKey, normalizedNextNumber);
+            PlayerPrefs.SetInt(WorkThreadTitlePolicy.NextTitleNumberPrefsKey, normalizedNextNumber);
             PlayerPrefs.Save();
         }
 
-        private int FindHighestExistingUnderwaterTaskNumber()
+        private int FindHighestExistingWorkThreadNumber()
         {
             int highestNumber = 0;
 
-            foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
+            foreach (KeyValuePair<string, ActiveThreadAnimalController> pair in activeThreads)
             {
-                if (pair.Value != null && TryReadUnderwaterTaskNumber(pair.Value.Title, out int threadNumber))
+                if (pair.Value != null && WorkThreadTitlePolicy.TryReadDefaultTitleNumber(pair.Value.Title, out int threadNumber))
                 {
                     highestNumber = Mathf.Max(highestNumber, threadNumber);
                 }
             }
 
-            foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
+            foreach (KeyValuePair<string, ArchivedThreadAnimalController> pair in archivedAnimals)
             {
-                if (pair.Value != null && TryReadUnderwaterTaskNumber(pair.Value.Title, out int archivedNumber))
+                if (pair.Value != null && WorkThreadTitlePolicy.TryReadDefaultTitleNumber(pair.Value.Title, out int archivedNumber))
                 {
                     highestNumber = Mathf.Max(highestNumber, archivedNumber);
                 }
             }
 
             return highestNumber;
-        }
-
-        private static string CreateUnderwaterTaskTitle(int number)
-        {
-            return $"{UnderwaterTaskTitlePrefix}{Mathf.Max(1, number)}";
-        }
-
-        private static bool TryReadUnderwaterTaskNumber(string title, out int number)
-        {
-            number = 0;
-
-            if (string.IsNullOrWhiteSpace(title))
-            {
-                return false;
-            }
-
-            string trimmedTitle = title.Trim();
-
-            if (!trimmedTitle.StartsWith(UnderwaterTaskTitlePrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            string suffix = trimmedTitle.Substring(UnderwaterTaskTitlePrefix.Length).Trim();
-            return int.TryParse(suffix, out number) && number > 0;
         }
 
         private static string FormatVector(Vector3 vector)

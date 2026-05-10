@@ -100,8 +100,8 @@ namespace Forest
             string safeInstructions = string.IsNullOrWhiteSpace(instructions)
                 ? "Answer the user's spoken question or request clearly and briefly."
                 : instructions.Trim();
-            float[] realtimeSamples = ResampleMono(monoSamples, sampleRate, RealtimeInputSampleRate);
-            string base64Audio = Convert.ToBase64String(FloatToPcm16(realtimeSamples));
+            float[] realtimeSamples = AudioSampleUtility.ResampleMono(monoSamples, sampleRate, RealtimeInputSampleRate);
+            string base64Audio = Convert.ToBase64String(AudioSampleUtility.FloatToPcm16(realtimeSamples));
             Log($"Voice question started. inputSamples={monoSamples.Length}, inputRate={sampleRate}, realtimeSamples={realtimeSamples.Length}, model={model}, voice={safeVoice}");
 
             using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -139,7 +139,7 @@ namespace Forest
                     catch (Exception ex) when (attempt == 0 && IsRecoverableRealtimeSocketException(ex))
                     {
                         lastException = ex;
-                        LogWarning($"Recoverable realtime socket issue; reconnecting once. {Shorten(ExceptionMessage(ex), 180)}");
+                        LogWarning($"Recoverable realtime socket issue; reconnecting once. {ForestText.Shorten(ExceptionMessage(ex), 180)}");
                         await CloseAnswerSessionAsync("answer session reconnecting");
                     }
                 }
@@ -232,7 +232,7 @@ namespace Forest
             }
             catch (Exception ex)
             {
-                LogWarning($"Realtime answer session close failed. {Shorten(ExceptionMessage(ex), 180)}");
+                LogWarning($"Realtime answer session close failed. {ForestText.Shorten(ExceptionMessage(ex), 180)}");
             }
             finally
             {
@@ -517,7 +517,7 @@ namespace Forest
                     Log($"Realtime audio response done. pcmBytes={pcmBytes.Length}, transcriptLength={transcript.Length}, textLength={text.Length}, toolRounds={toolCallRounds}");
                     return new RealtimeAudioResult
                     {
-                        Samples = Pcm16ToFloat(pcmBytes),
+                        Samples = AudioSampleUtility.Pcm16ToFloat(pcmBytes),
                         SampleRate = RealtimeOutputSampleRate,
                         Transcript = string.IsNullOrWhiteSpace(transcript.ToString())
                             ? text.ToString().Trim()
@@ -580,7 +580,7 @@ namespace Forest
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
                 return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
-                    ["error"] = Shorten(message, 400)
+                    ["error"] = ForestText.Shorten(message, 400)
                 });
             }
         }
@@ -608,7 +608,7 @@ namespace Forest
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
                 return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
                 {
-                    ["error"] = Shorten(message, 400)
+                    ["error"] = ForestText.Shorten(message, 400)
                 });
             }
         }
@@ -804,75 +804,6 @@ namespace Forest
             }
 
             return current as string;
-        }
-
-        private static byte[] FloatToPcm16(float[] samples)
-        {
-            byte[] bytes = new byte[samples.Length * 2];
-
-            for (int i = 0; i < samples.Length; i++)
-            {
-                float clamped = Math.Max(-1f, Math.Min(1f, samples[i]));
-                short value = (short)(clamped < 0f ? clamped * 32768f : clamped * 32767f);
-                int offset = i * 2;
-                bytes[offset] = (byte)(value & 0xff);
-                bytes[offset + 1] = (byte)((value >> 8) & 0xff);
-            }
-
-            return bytes;
-        }
-
-        private static float[] Pcm16ToFloat(byte[] bytes)
-        {
-            if (bytes == null || bytes.Length < 2)
-            {
-                return Array.Empty<float>();
-            }
-
-            int sampleCount = bytes.Length / 2;
-            float[] samples = new float[sampleCount];
-
-            for (int i = 0; i < sampleCount; i++)
-            {
-                int offset = i * 2;
-                short value = (short)(bytes[offset] | (bytes[offset + 1] << 8));
-                samples[i] = value < 0 ? value / 32768f : value / 32767f;
-            }
-
-            return samples;
-        }
-
-        private static float[] ResampleMono(float[] samples, int sourceRate, int targetRate)
-        {
-            if (sourceRate == targetRate)
-            {
-                return samples;
-            }
-
-            int outputLength = Math.Max(1, (int)Math.Round(samples.Length * (targetRate / (double)sourceRate)));
-            float[] output = new float[outputLength];
-
-            for (int i = 0; i < output.Length; i++)
-            {
-                double sourcePosition = i * (sourceRate / (double)targetRate);
-                int index = (int)Math.Floor(sourcePosition);
-                int nextIndex = Math.Min(samples.Length - 1, index + 1);
-                float blend = (float)(sourcePosition - index);
-                output[i] = samples[index] + ((samples[nextIndex] - samples[index]) * blend);
-            }
-
-            return output;
-        }
-
-        private static string Shorten(string text, int maxLength)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return string.Empty;
-            }
-
-            string trimmed = text.Trim();
-            return trimmed.Length <= maxLength ? trimmed : trimmed.Substring(0, Math.Max(0, maxLength - 3)).TrimEnd() + "...";
         }
 
         private string ReadApiKey()

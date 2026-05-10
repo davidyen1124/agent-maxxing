@@ -84,7 +84,7 @@ namespace Forest.Tests
         public void ThreadAnimalBubbleShowsIdleTitleAndRunningMessage()
         {
             GameObject gameObject = new GameObject("Thread Animal Test");
-            ThreadAnimalAI animal = gameObject.AddComponent<ThreadAnimalAI>();
+            ActiveThreadAnimalController animal = gameObject.AddComponent<ActiveThreadAnimalController>();
 
             try
             {
@@ -135,54 +135,35 @@ namespace Forest.Tests
         }
 
         [Test]
-        public void UnderwaterTaskNumberParserRejectsLegacyTaskPrefixes()
+        public void WorkThreadTitlePolicyRejectsLegacyTaskPrefixes()
         {
-            MethodInfo method = typeof(ForestGameDirector).GetMethod(
-                "TryReadUnderwaterTaskNumber",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            Assert.That(method, Is.Not.Null);
+            Assert.That(WorkThreadTitlePolicy.TryReadDefaultTitleNumber("Underwater task 42", out int currentNumber), Is.True);
+            Assert.That(currentNumber, Is.EqualTo(42));
 
-            object[] currentArgs = { "Underwater task 42", 0 };
-            Assert.That(method.Invoke(null, currentArgs), Is.EqualTo(true));
-            Assert.That(currentArgs[1], Is.EqualTo(42));
+            Assert.That(WorkThreadTitlePolicy.TryReadDefaultTitleNumber("Forest task 42", out int forestNumber), Is.False);
+            Assert.That(forestNumber, Is.EqualTo(0));
 
-            object[] forestArgs = { "Forest task 42", 0 };
-            Assert.That(method.Invoke(null, forestArgs), Is.EqualTo(false));
-            Assert.That(forestArgs[1], Is.EqualTo(0));
-
-            object[] gameArgs = { "Game task 42", 0 };
-            Assert.That(method.Invoke(null, gameArgs), Is.EqualTo(false));
-            Assert.That(gameArgs[1], Is.EqualTo(0));
+            Assert.That(WorkThreadTitlePolicy.TryReadDefaultTitleNumber("Game task 42", out int gameNumber), Is.False);
+            Assert.That(gameNumber, Is.EqualTo(0));
         }
 
         [Test]
-        public void RealtimeThreadTitleCleanerKeepsLegacyPrefixes()
+        public void RealtimeCommandParserKeepsLegacyTitlePrefixes()
         {
-            MethodInfo method = typeof(ForestGameDirector).GetMethod(
-                "CleanRealtimeThreadTitle",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            Assert.That(method, Is.Not.Null);
-
-            Assert.That(
-                method.Invoke(null, new object[] { "Underwater: Map terrain paths", "" }),
-                Is.EqualTo("Map terrain paths"));
-            Assert.That(
-                method.Invoke(null, new object[] { "Forest: Map terrain paths", "" }),
-                Is.EqualTo("Forest: Map terrain paths"));
-            Assert.That(
-                method.Invoke(null, new object[] { "Game: Map terrain paths", "" }),
-                Is.EqualTo("Game: Map terrain paths"));
+            Assert.That(RealtimeCommandParser.CleanWorkThreadTitle("Underwater: Map terrain paths", ""), Is.EqualTo("Map terrain paths"));
+            Assert.That(RealtimeCommandParser.CleanWorkThreadTitle("Forest: Map terrain paths", ""), Is.EqualTo("Forest: Map terrain paths"));
+            Assert.That(RealtimeCommandParser.CleanWorkThreadTitle("Game: Map terrain paths", ""), Is.EqualTo("Game: Map terrain paths"));
         }
 
         [Test]
         public void ThreadAnimalRandomActionsNeverChooseFailure()
         {
             GameObject gameObject = new GameObject("Thread Animal Random Action Test");
-            ThreadAnimalAI animal = gameObject.AddComponent<ThreadAnimalAI>();
+            ActiveThreadAnimalController animal = gameObject.AddComponent<ActiveThreadAnimalController>();
 
             try
             {
-                MethodInfo method = typeof(ThreadAnimalAI).GetMethod(
+                MethodInfo method = typeof(ActiveThreadAnimalController).GetMethod(
                     "PickRandomActionState",
                     BindingFlags.NonPublic | BindingFlags.Instance);
                 Assert.That(method, Is.Not.Null);
@@ -231,28 +212,18 @@ namespace Forest.Tests
         [Test]
         public void AtmosphereCommandAliasesCoverCommonTimeAndWeatherPhrases()
         {
-            MethodInfo normalizeTime = typeof(ForestGameDirector).GetMethod(
-                "NormalizeTimeOfDayOption",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            MethodInfo normalizeWeather = typeof(ForestGameDirector).GetMethod(
-                "NormalizeWeatherOption",
-                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.That(RealtimeCommandParser.NormalizeTimeOfDay("first light", "night"), Is.EqualTo("dawn"));
+            Assert.That(RealtimeCommandParser.NormalizeTimeOfDay("midday", "night"), Is.EqualTo("day"));
+            Assert.That(RealtimeCommandParser.NormalizeTimeOfDay("golden-hour", "night"), Is.EqualTo("sunset"));
+            Assert.That(RealtimeCommandParser.NormalizeTimeOfDay("moonlit", "day"), Is.EqualTo("night"));
+            Assert.That(RealtimeCommandParser.NormalizeTimeOfDay("preserve", "sunset"), Is.EqualTo("sunset"));
 
-            Assert.That(normalizeTime, Is.Not.Null);
-            Assert.That(normalizeWeather, Is.Not.Null);
-
-            Assert.That(normalizeTime.Invoke(null, new object[] { "first light", "night" }), Is.EqualTo("dawn"));
-            Assert.That(normalizeTime.Invoke(null, new object[] { "midday", "night" }), Is.EqualTo("day"));
-            Assert.That(normalizeTime.Invoke(null, new object[] { "golden-hour", "night" }), Is.EqualTo("sunset"));
-            Assert.That(normalizeTime.Invoke(null, new object[] { "moonlit", "day" }), Is.EqualTo("night"));
-            Assert.That(normalizeTime.Invoke(null, new object[] { "preserve", "sunset" }), Is.EqualTo("sunset"));
-
-            Assert.That(normalizeWeather.Invoke(null, new object[] { "clear sky", "storm" }), Is.EqualTo("clear"));
-            Assert.That(normalizeWeather.Invoke(null, new object[] { "overcast", "clear" }), Is.EqualTo("fog"));
-            Assert.That(normalizeWeather.Invoke(null, new object[] { "drizzle", "clear" }), Is.EqualTo("rain"));
-            Assert.That(normalizeWeather.Invoke(null, new object[] { "lightning", "clear" }), Is.EqualTo("storm"));
-            Assert.That(normalizeWeather.Invoke(null, new object[] { "flurries", "clear" }), Is.EqualTo("snow"));
-            Assert.That(normalizeWeather.Invoke(null, new object[] { "same", "rain" }), Is.EqualTo("rain"));
+            Assert.That(RealtimeCommandParser.NormalizeWeather("clear sky", "storm"), Is.EqualTo("clear"));
+            Assert.That(RealtimeCommandParser.NormalizeWeather("overcast", "clear"), Is.EqualTo("fog"));
+            Assert.That(RealtimeCommandParser.NormalizeWeather("drizzle", "clear"), Is.EqualTo("rain"));
+            Assert.That(RealtimeCommandParser.NormalizeWeather("lightning", "clear"), Is.EqualTo("storm"));
+            Assert.That(RealtimeCommandParser.NormalizeWeather("flurries", "clear"), Is.EqualTo("snow"));
+            Assert.That(RealtimeCommandParser.NormalizeWeather("same", "rain"), Is.EqualTo("rain"));
         }
     }
 }

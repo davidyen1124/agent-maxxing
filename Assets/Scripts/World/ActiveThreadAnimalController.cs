@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace Forest
 {
-    public sealed class ThreadAnimalAI : MonoBehaviour
+    public sealed class ActiveThreadAnimalController : MonoBehaviour
     {
         private const float TerrainGroundOffset = 0.05f;
         private const float TerrainTargetArrivalDistance = 0.95f;
@@ -84,7 +84,7 @@ namespace Forest
 
             if (animalVisual == null)
             {
-                Debug.LogWarning("[ThreadAnimalAI] No 3D animal prefab is available; thread animal will not be created.");
+                Debug.LogWarning("[ActiveThreadAnimalController] No 3D animal prefab is available; thread animal will not be created.");
                 return false;
             }
 

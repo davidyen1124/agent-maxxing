@@ -2,6 +2,7 @@ using UnityEngine;
 
 namespace ithappy.Animals_FREE
 {
+#pragma warning disable 0649
     [RequireComponent(typeof(CreatureMover))]
     public class MovePlayerInput : MonoBehaviour
     {
@@ -75,4 +76,5 @@ namespace ithappy.Animals_FREE
             }
         }
     }
+#pragma warning restore 0649
 }

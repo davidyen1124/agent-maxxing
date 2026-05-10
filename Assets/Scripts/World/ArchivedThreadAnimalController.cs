@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace Forest
 {
-    public sealed class ArchivedThreadAnimal : MonoBehaviour
+    public sealed class ArchivedThreadAnimalController : MonoBehaviour
     {
         private const float ArchivedAnimalHeight = 1f;
         private const float TerrainGroundOffset = 0.05f;
@@ -51,7 +51,7 @@ namespace Forest
 
             if (animalVisual == null)
             {
-                Debug.LogWarning("[ArchivedThreadAnimal] No 3D animal prefab is available; archived animal will not be created.");
+                Debug.LogWarning("[ArchivedThreadAnimalController] No 3D animal prefab is available; archived animal will not be created.");
                 return false;
             }
 
