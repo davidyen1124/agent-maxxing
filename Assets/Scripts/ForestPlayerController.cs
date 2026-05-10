@@ -213,14 +213,12 @@ namespace Forest
             bool voicePressed = false;
             bool voiceReleased = false;
             bool toggleHudPressed = false;
-            bool openWebsitePressed = false;
 
             if (Keyboard.current != null)
             {
                 voicePressed = Keyboard.current.vKey.wasPressedThisFrame;
                 voiceReleased = Keyboard.current.vKey.wasReleasedThisFrame;
                 toggleHudPressed = Keyboard.current.hKey.wasPressedThisFrame;
-                openWebsitePressed = Keyboard.current.oKey.wasPressedThisFrame;
             }
 
             if (toggleHudPressed)
@@ -238,10 +236,6 @@ namespace Forest
                 director.EndRealtimeVoiceQuestionFromPlayer();
             }
 
-            if (openWebsitePressed)
-            {
-                director.OpenLatestWebsiteFromPlayer();
-            }
         }
     }
 }

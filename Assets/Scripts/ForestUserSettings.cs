@@ -12,21 +12,8 @@ namespace Forest
         public string openAiApiKey;
         public string openAiRealtimeModel;
         public string openAiRealtimeVoice;
-        public string niaApiKey;
-        public string niaBaseUrl;
-        public string niaDefaultSearchMode;
-        public string[] niaRepositories;
-        public string[] niaDataSources;
-        public int niaMaxTokens;
         public int voiceSampleRate;
         public float voiceMaxCaptureSeconds;
-        public string openAiWebsiteModel;
-        public string tensorlakeApiKey;
-        public string tensorlakeSandboxNamePrefix;
-        public int tensorlakePreviewPort;
-        public string insforgeBaseUrl;
-        public string insforgeApiKey;
-        public bool websiteDeployToInsforge;
 
         public static string FilePath => Path.Combine(Directory.GetCurrentDirectory(), RelativePath);
 
@@ -62,21 +49,6 @@ namespace Forest
             return string.IsNullOrWhiteSpace(openAiRealtimeVoice) ? fallback : openAiRealtimeVoice.Trim();
         }
 
-        public string NiaBaseUrlOr(string fallback)
-        {
-            return string.IsNullOrWhiteSpace(niaBaseUrl) ? fallback : niaBaseUrl.Trim();
-        }
-
-        public string NiaDefaultSearchModeOr(string fallback)
-        {
-            return string.IsNullOrWhiteSpace(niaDefaultSearchMode) ? fallback : niaDefaultSearchMode.Trim();
-        }
-
-        public int NiaMaxTokensOr(int fallback)
-        {
-            return niaMaxTokens > 0 ? niaMaxTokens : fallback;
-        }
-
         public int VoiceSampleRateOr(int fallback)
         {
             return voiceSampleRate > 0 ? voiceSampleRate : fallback;
@@ -85,21 +57,6 @@ namespace Forest
         public float VoiceMaxCaptureSecondsOr(float fallback)
         {
             return voiceMaxCaptureSeconds > 0f ? voiceMaxCaptureSeconds : fallback;
-        }
-
-        public string OpenAiWebsiteModelOr(string fallback)
-        {
-            return string.IsNullOrWhiteSpace(openAiWebsiteModel) ? fallback : openAiWebsiteModel.Trim();
-        }
-
-        public string TensorlakeSandboxNamePrefixOr(string fallback)
-        {
-            return string.IsNullOrWhiteSpace(tensorlakeSandboxNamePrefix) ? fallback : tensorlakeSandboxNamePrefix.Trim();
-        }
-
-        public int TensorlakePreviewPortOr(int fallback)
-        {
-            return tensorlakePreviewPort > 0 ? tensorlakePreviewPort : fallback;
         }
     }
 }

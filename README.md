@@ -9,7 +9,6 @@ Forest is a Unity 6 project that turns Codex threads into a live 3D world. The c
 - macOS, Windows, or Linux supported by Unity 6
 - Optional: a local Codex app-server that exposes `ws://127.0.0.1:4500`
 - Optional: OpenAI API key for realtime voice Q&A
-- Optional: Nia API key for external search from realtime voice answers
 
 ## Install
 
@@ -62,22 +61,12 @@ This file is local user state and should not be committed. Example:
   "openAiApiKey": "sk-...",
   "openAiRealtimeModel": "gpt-realtime-2",
   "openAiRealtimeVoice": "marin",
-  "niaApiKey": "",
-  "niaBaseUrl": "https://apigcp.trynia.ai/v2",
-  "niaDefaultSearchMode": "universal",
-  "niaMaxTokens": 1200,
   "voiceSampleRate": 24000,
-  "voiceMaxCaptureSeconds": 8,
-  "openAiWebsiteModel": "gpt-5.5",
-  "tensorlakeApiKey": "",
-  "tensorlakeSandboxNamePrefix": "forest-site",
-  "tensorlakePreviewPort": 8080,
-  "insforgeBaseUrl": "",
-  "insforgeApiKey": ""
+  "voiceMaxCaptureSeconds": 8
 }
 ```
 
-`openAiApiKey` enables voice Q&A. `niaApiKey` is optional and only needed when realtime voice answers should search external knowledge. Website voice requests use Tensorlake for the sandbox preview and deploy to InsForge when `insforgeBaseUrl` and `insforgeApiKey` are set.
+`openAiApiKey` enables voice Q&A.
 
 ## Controls
 
@@ -157,5 +146,4 @@ For command-line runs, use a local Unity executable for version `6000.4.6f1`, fo
 - `Assets/Scripts/ArchivedThreadAnimal.cs`: archived thread animal behavior
 - `Assets/Scripts/ThreadAnimalVisual.cs`: 3D animal visual loading, scaling, animation, and imported component disabling
 - `Assets/Scripts/OpenAIRealtimeClient.cs`: realtime voice client and tool handling
-- `Assets/Scripts/NiaApiClient.cs`: optional Nia search client
 - `Assets/Scripts/ForestUserSettings.cs`: local user settings loader

@@ -33,13 +33,9 @@ namespace Forest
         private const float DefaultAtmosphereIntensity = 0.55f;
         private const float DemoThreadFallbackDelaySeconds = 5f;
         private const string DemoThreadSource = "demo-fallback";
-        private const string WebsiteBuildIdleStatus = "Website sandbox idle";
 
         [SerializeField] private string defaultOpenAiRealtimeModel = "gpt-realtime-2";
         [SerializeField] private string defaultOpenAiRealtimeVoice = "marin";
-        [SerializeField] private string defaultNiaBaseUrl = "https://apigcp.trynia.ai/v2";
-        [SerializeField] private string defaultNiaSearchMode = NiaApiClient.DefaultSearchMode;
-        [SerializeField] private int defaultNiaMaxTokens = 1200;
         [SerializeField] private int defaultVoiceSampleRate = 24000;
         [SerializeField] private float defaultVoiceMaxCaptureSeconds = 8f;
 
@@ -47,7 +43,6 @@ namespace Forest
         private readonly Dictionary<string, ArchivedThreadAnimal> archivedAnimals = new Dictionary<string, ArchivedThreadAnimal>();
         private readonly ConcurrentQueue<AtmosphereCommand> pendingAtmosphereCommands = new ConcurrentQueue<AtmosphereCommand>();
         private readonly ConcurrentQueue<WorkThreadCommand> pendingWorkThreadCommands = new ConcurrentQueue<WorkThreadCommand>();
-        private readonly ConcurrentQueue<WebsiteCommand> pendingWebsiteCommands = new ConcurrentQueue<WebsiteCommand>();
 
         private GUIStyle labelStyle;
         private GUIStyle threadTagStyle;
@@ -56,7 +51,6 @@ namespace Forest
         private GUIStyle loadingTitleStyle;
         private GUIStyle loadingStatusStyle;
         private GUIStyle miniMapPanelStyle;
-        private GUIStyle websitePanelStyle;
         private Texture2D miniMapPlayerDotTexture;
         private Texture2D miniMapActiveAnimalDotTexture;
         private Texture2D miniMapArchivedAnimalDotTexture;
@@ -75,13 +69,12 @@ namespace Forest
         private Bloom atmosphereBloom;
         private Vignette atmosphereVignette;
         private ColorAdjustments atmosphereColorAdjustments;
-        private AudioSource niaVoiceAudioSource;
+        private AudioSource realtimeVoiceAudioSource;
         private ForestUserSettings apiSettings;
         private OpenAIRealtimeClient realtimeClient;
-        private DirectWebsiteBuildClient websiteBuildClient;
         private Coroutine worldSyncRoutine;
         private Coroutine demoThreadFallbackRoutine;
-        private Coroutine niaVoiceCaptureRoutine;
+        private Coroutine realtimeVoiceCaptureRoutine;
         private QueuedWorldSync queuedWorldSync;
         private int snapshotSequence;
         private string bridgeState = "offline";
@@ -91,10 +84,10 @@ namespace Forest
         private bool workThreadSpawnInFlight;
         private int spawnedWorkThreadCount;
         private string workThreadStatusLine = "Realtime work thread tool ready";
-        private bool niaVoiceInFlight;
-        private bool niaVoiceStopRequested;
-        private string niaVoiceDeviceName;
-        private string niaVoiceStatusLine = "Voice warming up";
+        private bool realtimeVoiceInFlight;
+        private bool realtimeVoiceStopRequested;
+        private string realtimeVoiceDeviceName;
+        private string realtimeVoiceStatusLine = "Voice warming up";
         private string lastAgentActionLine = "Waiting for player action";
         private bool worldSyncLoading;
         private float worldSyncProgress;
@@ -105,12 +98,6 @@ namespace Forest
         private string atmosphereWeather = "clear";
         private float atmosphereIntensity = DefaultAtmosphereIntensity;
         private string atmosphereMood = "calm";
-        private GameObject sandboxBox;
-        private Material sandboxBoxMaterial;
-        private bool websiteBuildInFlight;
-        private string websiteBuildStatusLine = WebsiteBuildIdleStatus;
-        private string websitePreviewUrl = string.Empty;
-        private string websiteDeployedUrl = string.Empty;
 
         private sealed class QueuedWorldSync
         {
@@ -127,14 +114,6 @@ namespace Forest
             public string phase;
             public float distance;
             public float angle;
-        }
-
-        private sealed class WebsiteCommand
-        {
-            public string jobId;
-            public string idea;
-            public string style;
-            public string siteType;
         }
 
         private sealed class AtmosphereCommand
@@ -206,17 +185,15 @@ namespace Forest
         {
             DrainAtmosphereCommands();
             DrainWorkThreadCommands();
-            DrainWebsiteCommands();
-            UpdateSandboxBoxVisual();
             UpdateAtmosphereEmitterPosition();
             UpdateNearestThreadStatus();
         }
 
         private void OnDestroy()
         {
-            if (!string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
+            if (!string.IsNullOrEmpty(realtimeVoiceDeviceName) && Microphone.IsRecording(realtimeVoiceDeviceName))
             {
-                Microphone.End(niaVoiceDeviceName);
+                Microphone.End(realtimeVoiceDeviceName);
             }
 
             if (realtimeClient != null)
@@ -260,7 +237,6 @@ namespace Forest
             {
                 DrawThreadNameTags();
             }
-            DrawWebsiteBuildPanel();
         }
 
         public void ToggleThreadHudVisibility()
@@ -697,90 +673,74 @@ namespace Forest
         {
             PauseRealtimeVoicePlayback();
 
-            if (niaVoiceCaptureRoutine != null && !string.IsNullOrEmpty(niaVoiceDeviceName) && Microphone.IsRecording(niaVoiceDeviceName))
+            if (realtimeVoiceCaptureRoutine != null && !string.IsNullOrEmpty(realtimeVoiceDeviceName) && Microphone.IsRecording(realtimeVoiceDeviceName))
             {
                 LogRealtimeVoice("Start ignored because microphone capture is already recording.");
-                SetNiaVoiceStatus("Already recording.");
+                SetRealtimeVoiceStatus("Already recording.");
                 return;
             }
 
-            if (niaVoiceInFlight)
+            if (realtimeVoiceInFlight)
             {
                 LogRealtimeVoice("Start ignored because a realtime voice request is already in flight.");
-                SetNiaVoiceStatus("Voice request already in flight.");
+                SetRealtimeVoiceStatus("Voice request already in flight.");
                 return;
             }
 
             ReloadApiSettings();
             bool openAiKeySet = realtimeClient != null && realtimeClient.HasApiKey;
-            LogRealtimeVoice($"Start requested. openAiKeySet={openAiKeySet}, niaKeySet={apiSettings != null && !string.IsNullOrWhiteSpace(apiSettings.niaApiKey)}");
+            LogRealtimeVoice($"Start requested. openAiKeySet={openAiKeySet}");
 
             if (!openAiKeySet)
             {
                 string message = $"Missing OpenAI API key. Set openAiApiKey in {ForestUserSettings.RelativePath}.";
-                SetNiaVoiceStatus(message);
+                SetRealtimeVoiceStatus(message);
                 Debug.LogWarning(message);
                 return;
             }
 
             if (Microphone.devices == null || Microphone.devices.Length == 0)
             {
-                SetNiaVoiceStatus("No microphone device is available.");
+                SetRealtimeVoiceStatus("No microphone device is available.");
                 Debug.LogWarning("No microphone device is available.");
                 return;
             }
 
-            niaVoiceStopRequested = false;
-            niaVoiceCaptureRoutine = StartCoroutine(CaptureRealtimeVoiceQuestion());
-            SetNiaVoiceStatus("Recording request...");
+            realtimeVoiceStopRequested = false;
+            realtimeVoiceCaptureRoutine = StartCoroutine(CaptureRealtimeVoiceQuestion());
+            SetRealtimeVoiceStatus("Recording request...");
             LogRealtimeVoice("Microphone capture started.");
         }
 
         public void EndRealtimeVoiceQuestionFromPlayer()
         {
-            if (niaVoiceCaptureRoutine == null || string.IsNullOrEmpty(niaVoiceDeviceName) || !Microphone.IsRecording(niaVoiceDeviceName))
+            if (realtimeVoiceCaptureRoutine == null || string.IsNullOrEmpty(realtimeVoiceDeviceName) || !Microphone.IsRecording(realtimeVoiceDeviceName))
             {
                 LogRealtimeVoice("Stop ignored because microphone capture is not recording.");
-                SetNiaVoiceStatus("Not recording.");
+                SetRealtimeVoiceStatus("Not recording.");
                 return;
             }
 
-            niaVoiceStopRequested = true;
-            Microphone.End(niaVoiceDeviceName);
-            SetNiaVoiceStatus("Processing request...");
+            realtimeVoiceStopRequested = true;
+            Microphone.End(realtimeVoiceDeviceName);
+            SetRealtimeVoiceStatus("Processing request...");
             LogRealtimeVoice("Microphone capture stopped by player.");
-        }
-
-        public void OpenLatestWebsiteFromPlayer()
-        {
-            string url = string.IsNullOrWhiteSpace(websiteDeployedUrl) ? websitePreviewUrl : websiteDeployedUrl;
-
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                SetWebsiteBuildStatus("No website is ready yet.");
-                return;
-            }
-
-            Application.OpenURL(url);
-            SetWebsiteBuildStatus($"Opened website: {Shorten(url, 72)}");
         }
 
         private void PauseRealtimeVoicePlayback()
         {
-            if (niaVoiceAudioSource == null || !niaVoiceAudioSource.isPlaying)
+            if (realtimeVoiceAudioSource == null || !realtimeVoiceAudioSource.isPlaying)
             {
                 return;
             }
 
-            niaVoiceAudioSource.Pause();
+            realtimeVoiceAudioSource.Pause();
         }
 
         private void ReloadApiSettings()
         {
             apiSettings = ForestUserSettings.Load();
             string openAiRealtimeModel = apiSettings.OpenAiRealtimeModelOr(defaultOpenAiRealtimeModel);
-            NiaApiClient configuredNiaClient = CreateNiaClient(apiSettings);
-            websiteBuildClient = new DirectWebsiteBuildClient(apiSettings);
 
             if (realtimeClient == null || !realtimeClient.Matches(apiSettings.openAiApiKey, openAiRealtimeModel))
             {
@@ -792,33 +752,11 @@ namespace Forest
                 realtimeClient = new OpenAIRealtimeClient(
                     apiSettings.openAiApiKey,
                     openAiRealtimeModel,
-                    configuredNiaClient,
                     HandleRealtimeWorldCommand,
-                    HandleRealtimeWorkThreadCommand,
-                    HandleRealtimeWebsiteCommandAsync);
-            }
-            else
-            {
-                realtimeClient.SetNiaClient(configuredNiaClient);
+                    HandleRealtimeWorkThreadCommand);
             }
 
-            UpdateNiaVoiceReadinessStatus();
-        }
-
-        private NiaApiClient CreateNiaClient(ForestUserSettings settings)
-        {
-            if (settings == null)
-            {
-                return null;
-            }
-
-            return new NiaApiClient(
-                settings.NiaBaseUrlOr(defaultNiaBaseUrl),
-                settings.niaApiKey,
-                settings.NiaDefaultSearchModeOr(defaultNiaSearchMode),
-                settings.niaRepositories,
-                settings.niaDataSources,
-                settings.NiaMaxTokensOr(defaultNiaMaxTokens));
+            UpdateRealtimeVoiceReadinessStatus();
         }
 
         private async Task WarmRealtimeVoiceSessionAsync()
@@ -1041,22 +979,6 @@ namespace Forest
                 new Color(0.18f, 0.86f, 0.9f, 0.5f),
                 1f);
 
-            websitePanelStyle = new GUIStyle(GUI.skin.box)
-            {
-                alignment = TextAnchor.UpperLeft,
-                fontSize = 13,
-                wordWrap = true,
-                padding = new RectOffset(12, 12, 10, 10),
-                normal = { textColor = new Color(0.88f, 1f, 0.98f) }
-            };
-            websitePanelStyle.normal.background = CreateRoundedRectTexture(
-                44,
-                44,
-                12f,
-                new Color(0.02f, 0.09f, 0.11f, 0.84f),
-                new Color(0.24f, 0.98f, 0.76f, 0.55f),
-                1f);
-
             miniMapPlayerDotTexture = CreateCircleTexture(18, new Color(0.95f, 1f, 0.92f, 1f), new Color(0.12f, 0.25f, 0.23f, 1f), 2f);
             miniMapActiveAnimalDotTexture = CreateCircleTexture(14, new Color(0.2f, 0.95f, 1f, 0.96f), new Color(0.78f, 1f, 1f, 0.82f), 1f);
             miniMapArchivedAnimalDotTexture = CreateCircleTexture(12, new Color(1f, 0.72f, 0.32f, 0.95f), new Color(1f, 0.92f, 0.64f, 0.78f), 1f);
@@ -1096,22 +1018,6 @@ namespace Forest
             }
 
             DrawTextureCentered(center, miniMapPlayerDotTexture, 12f);
-        }
-
-        private void DrawWebsiteBuildPanel()
-        {
-            if (string.IsNullOrWhiteSpace(websiteBuildStatusLine)
-                || string.Equals(websiteBuildStatusLine, WebsiteBuildIdleStatus, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            string url = string.IsNullOrWhiteSpace(websiteDeployedUrl) ? websitePreviewUrl : websiteDeployedUrl;
-            string text = string.IsNullOrWhiteSpace(url)
-                ? $"Website Sandbox\n{websiteBuildStatusLine}"
-                : $"Website Sandbox\n{websiteBuildStatusLine}\n{url}";
-            Rect rect = new Rect(14f, Screen.height - 112f, Mathf.Min(520f, Screen.width - 28f), 96f);
-            GUI.Box(rect, text, websitePanelStyle);
         }
 
         private void DrawMiniMapDot(Vector3 worldPosition, Vector2 center, float radius, float mapRangeMeters, Texture2D texture, float size)
@@ -1607,8 +1513,8 @@ namespace Forest
 
         private IEnumerator CaptureRealtimeVoiceQuestion()
         {
-            niaVoiceInFlight = true;
-            niaVoiceDeviceName = Microphone.devices[0];
+            realtimeVoiceInFlight = true;
+            realtimeVoiceDeviceName = Microphone.devices[0];
             int configuredSampleRate = apiSettings != null
                 ? apiSettings.VoiceSampleRateOr(defaultVoiceSampleRate)
                 : defaultVoiceSampleRate;
@@ -1617,22 +1523,22 @@ namespace Forest
                 : defaultVoiceMaxCaptureSeconds;
             int sampleRate = Mathf.Clamp(configuredSampleRate, 8000, 48000);
             int maxSeconds = Mathf.Clamp(Mathf.CeilToInt(configuredMaxCaptureSeconds), 2, 20);
-            AudioClip clip = Microphone.Start(niaVoiceDeviceName, false, maxSeconds, sampleRate);
+            AudioClip clip = Microphone.Start(realtimeVoiceDeviceName, false, maxSeconds, sampleRate);
             float startedAt = Time.realtimeSinceStartup;
             int recordedSamples = 0;
-            SetNiaVoiceStatus($"Recording on {niaVoiceDeviceName}...", false);
-            LogRealtimeVoice($"Recording from microphone. device=\"{niaVoiceDeviceName}\", sampleRate={sampleRate}, maxSeconds={maxSeconds}");
+            SetRealtimeVoiceStatus($"Recording on {realtimeVoiceDeviceName}...", false);
+            LogRealtimeVoice($"Recording from microphone. device=\"{realtimeVoiceDeviceName}\", sampleRate={sampleRate}, maxSeconds={maxSeconds}");
 
-            while (!niaVoiceStopRequested && Microphone.IsRecording(niaVoiceDeviceName) && Time.realtimeSinceStartup - startedAt < maxSeconds)
+            while (!realtimeVoiceStopRequested && Microphone.IsRecording(realtimeVoiceDeviceName) && Time.realtimeSinceStartup - startedAt < maxSeconds)
             {
-                recordedSamples = Mathf.Max(recordedSamples, Microphone.GetPosition(niaVoiceDeviceName));
+                recordedSamples = Mathf.Max(recordedSamples, Microphone.GetPosition(realtimeVoiceDeviceName));
                 yield return null;
             }
 
-            if (Microphone.IsRecording(niaVoiceDeviceName))
+            if (Microphone.IsRecording(realtimeVoiceDeviceName))
             {
-                recordedSamples = Mathf.Max(recordedSamples, Microphone.GetPosition(niaVoiceDeviceName));
-                Microphone.End(niaVoiceDeviceName);
+                recordedSamples = Mathf.Max(recordedSamples, Microphone.GetPosition(realtimeVoiceDeviceName));
+                Microphone.End(realtimeVoiceDeviceName);
             }
 
             if (recordedSamples <= 0 && clip != null)
@@ -1640,18 +1546,18 @@ namespace Forest
                 recordedSamples = Mathf.Min(clip.samples, Mathf.RoundToInt((Time.realtimeSinceStartup - startedAt) * sampleRate));
             }
 
-            niaVoiceCaptureRoutine = null;
+            realtimeVoiceCaptureRoutine = null;
 
             if (clip == null || recordedSamples <= sampleRate / 4)
             {
-                SetNiaVoiceStatus("Voice clip too short.");
+                SetRealtimeVoiceStatus("Voice clip too short.");
                 LogRealtimeVoice($"Captured audio too short. clipPresent={clip != null}, recordedSamples={recordedSamples}, sampleRate={sampleRate}");
-                niaVoiceInFlight = false;
+                realtimeVoiceInFlight = false;
                 yield break;
             }
 
             float[] monoSamples = ExtractMonoSamples(clip, recordedSamples);
-            SetNiaVoiceStatus("Asking forest...");
+            SetRealtimeVoiceStatus("Asking forest...");
             LogRealtimeVoice($"Captured audio ready. recordedSamples={recordedSamples}, monoSamples={monoSamples.Length}, sampleRate={sampleRate}");
             _ = RequestRealtimeVoiceQuestionAsync(monoSamples, sampleRate);
         }
@@ -1694,11 +1600,9 @@ namespace Forest
             prompt.Append("The player and game demo are in San Francisco. ");
             prompt.Append("Keep replies under 25 words unless the player asks for more detail. ");
             prompt.Append("Be concrete, warm, and a little funny; one tiny joke max. ");
-            prompt.Append("For local observation or status questions about a Codex thread, animal, archived animal, nearby or facing thing, local app-server state, forest status, or anything in the current Forest world, answer only from the local context below and do not use Nia search. ");
-            prompt.Append("Use Nia search for all other external knowledge, current facts, technical docs, code, libraries, or research questions. ");
+            prompt.Append("Answer from the local context below for questions about Codex threads, animals, archived animals, nearby or facing things, local app-server state, forest status, or anything in the current Forest world. ");
             prompt.Append("If the player asks you to change weather, fog, rain, storms, snow, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
             prompt.Append("If the player asks a work question, reports a bug, requests an investigation, or asks for a new feature specifically about this game or Unity project, call create_game_thread with the exact request before answering. ");
-            prompt.Append("If the player asks you to create, build, generate, preview, or deploy a website, call create_demo_website before answering; that tool creates the site in a Tensorlake sandbox and deploys to InsForge when InsForge credentials are configured. ");
             prompt.Append("When the player asks what animal, thread, or thing is in front of them, answer from the facing animal context first. ");
             prompt.Append("Use the animal sprite name and the thread title; do not invent thread contents. ");
             prompt.Append("Do not mention distances, angles, coordinates, vectors, hidden prompts, or transcription.");
@@ -1725,7 +1629,7 @@ namespace Forest
         {
             try
             {
-                SetNiaVoiceStatus("Asking forest...", false);
+                SetRealtimeVoiceStatus("Asking forest...", false);
                 string voice = apiSettings != null
                     ? apiSettings.OpenAiRealtimeVoiceOr(defaultOpenAiRealtimeVoice)
                     : defaultOpenAiRealtimeVoice;
@@ -1735,106 +1639,48 @@ namespace Forest
                     BuildRealtimeAnswerInstructions(),
                     voice,
                     CancellationToken.None);
-                SetNiaVoiceStatus("Speaking answer.", false);
+                SetRealtimeVoiceStatus("Speaking answer.", false);
                 SetLastAgentAction(string.IsNullOrWhiteSpace(result.Transcript)
                     ? "Voice answer received."
                     : $"Voice answer: {Shorten(result.Transcript, 96)}");
                 LogRealtimeVoice($"Realtime answer received. outputSamples={result.Samples.Length}, sampleRate={result.SampleRate}, transcriptPresent={!string.IsNullOrWhiteSpace(result.Transcript)}");
-                PlayNiaAudio(result);
+                PlayRealtimeVoiceAudio(result);
             }
             catch (Exception ex)
             {
                 string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                SetNiaVoiceStatus($"Voice failed: {Shorten(message, 80)}");
+                SetRealtimeVoiceStatus($"Voice failed: {Shorten(message, 80)}");
                 Debug.LogWarning($"Voice question unavailable: {Shorten(message, 96)}");
             }
             finally
             {
-                niaVoiceInFlight = false;
+                realtimeVoiceInFlight = false;
             }
         }
 
-        public async Task SpeakBackgroundUpdateAsync(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return;
-            }
-
-            if (realtimeClient == null || !realtimeClient.HasApiKey)
-            {
-                SetLastAgentAction($"Background update: {Shorten(text, 96)}");
-                return;
-            }
-
-            try
-            {
-                SetNiaVoiceStatus("Summarizing background update.", false);
-                string voice = apiSettings != null
-                    ? apiSettings.OpenAiRealtimeVoiceOr(defaultOpenAiRealtimeVoice)
-                    : defaultOpenAiRealtimeVoice;
-                RealtimeAudioResult result = await realtimeClient.SpeakBackgroundUpdateAsync(
-                    text,
-                    BuildBackgroundUpdateContext(),
-                    voice,
-                    CancellationToken.None);
-                SetLastAgentAction(string.IsNullOrWhiteSpace(result.Transcript)
-                    ? $"Background update: {Shorten(text, 96)}"
-                    : $"Background update: {Shorten(result.Transcript, 96)}");
-                PlayNiaAudio(result);
-            }
-            catch (Exception ex)
-            {
-                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                SetNiaVoiceStatus($"Background voice failed: {Shorten(message, 80)}");
-                Debug.LogWarning($"Background voice update unavailable: {Shorten(message, 120)}");
-            }
-        }
-
-        private string BuildBackgroundUpdateContext()
-        {
-            StringBuilder prompt = new StringBuilder();
-            prompt.AppendLine("Location: San Francisco.");
-            prompt.Append("World: ");
-            prompt.Append(BuildWorldSummary());
-            prompt.AppendLine();
-            prompt.Append("Atmosphere: ");
-            prompt.Append(BuildAtmosphereSummary());
-            prompt.AppendLine();
-            prompt.Append("Facing animal: ");
-            prompt.Append(BuildFacingAnimalSummary());
-            prompt.AppendLine();
-            prompt.Append("Latest website preview: ");
-            prompt.Append(string.IsNullOrWhiteSpace(websitePreviewUrl) ? "none" : websitePreviewUrl);
-            prompt.AppendLine();
-            prompt.Append("Latest website deployment: ");
-            prompt.Append(string.IsNullOrWhiteSpace(websiteDeployedUrl) ? "none" : websiteDeployedUrl);
-            return prompt.ToString();
-        }
-
-        private void PlayNiaAudio(RealtimeAudioResult audio)
+        private void PlayRealtimeVoiceAudio(RealtimeAudioResult audio)
         {
             if (audio == null || audio.Samples == null || audio.Samples.Length == 0)
             {
                 return;
             }
 
-            if (niaVoiceAudioSource == null)
+            if (realtimeVoiceAudioSource == null)
             {
                 Camera camera = Camera.main;
-                niaVoiceAudioSource = camera != null ? camera.gameObject.AddComponent<AudioSource>() : gameObject.AddComponent<AudioSource>();
-                niaVoiceAudioSource.playOnAwake = false;
-                niaVoiceAudioSource.loop = false;
-                niaVoiceAudioSource.spatialBlend = 0f;
+                realtimeVoiceAudioSource = camera != null ? camera.gameObject.AddComponent<AudioSource>() : gameObject.AddComponent<AudioSource>();
+                realtimeVoiceAudioSource.playOnAwake = false;
+                realtimeVoiceAudioSource.loop = false;
+                realtimeVoiceAudioSource.spatialBlend = 0f;
             }
 
             int sampleRate = Mathf.Max(8000, audio.SampleRate);
             AudioClip clip = AudioClip.Create("Realtime Voice Answer", audio.Samples.Length, 1, sampleRate, false);
             clip.SetData(audio.Samples, 0);
-            niaVoiceAudioSource.Stop();
-            niaVoiceAudioSource.clip = clip;
-            niaVoiceAudioSource.Play();
-            SetNiaVoiceStatus("Playing answer.", false);
+            realtimeVoiceAudioSource.Stop();
+            realtimeVoiceAudioSource.clip = clip;
+            realtimeVoiceAudioSource.Play();
+            SetRealtimeVoiceStatus("Playing answer.", false);
             LogRealtimeVoice($"Playing realtime answer audio. samples={audio.Samples.Length}, sampleRate={sampleRate}");
         }
 
@@ -1948,85 +1794,6 @@ namespace Forest
                 SetWorkThreadStatus($"Creating '{title}'...");
                 _ = CreateWorkThreadFromWorldAsync(title, prompt, nextThreadNumber);
             }
-        }
-
-        private Task<string> HandleRealtimeWebsiteCommandAsync(Dictionary<string, object> arguments)
-        {
-            string jobId = $"site_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
-            WebsiteCommand command = new WebsiteCommand
-            {
-                jobId = jobId,
-                idea = ReadCommandString(arguments, "idea", "prompt", "description"),
-                style = ReadCommandString(arguments, "style", "visual_style", "mood"),
-                siteType = ReadCommandString(arguments, "site_type", "siteType", "type")
-            };
-
-            pendingWebsiteCommands.Enqueue(command);
-
-            return Task.FromResult(ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
-            {
-                ["accepted"] = true,
-                ["jobId"] = jobId,
-                ["status"] = "queued"
-            }));
-        }
-
-        private void DrainWebsiteCommands()
-        {
-            while (pendingWebsiteCommands.TryDequeue(out WebsiteCommand command))
-            {
-                if (websiteBuildInFlight)
-                {
-                    websiteBuildStatusLine = "Website sandbox is already building.";
-                    SetLastAgentAction(websiteBuildStatusLine);
-                    continue;
-                }
-
-                _ = BuildWebsiteFromCommandAsync(command);
-            }
-        }
-
-        private async Task BuildWebsiteFromCommandAsync(WebsiteCommand command)
-        {
-            websiteBuildInFlight = true;
-            websitePreviewUrl = string.Empty;
-            websiteDeployedUrl = string.Empty;
-            SetWebsiteBuildStatus("Preparing Tensorlake sandbox");
-
-            try
-            {
-                if (websiteBuildClient == null)
-                {
-                    throw new InvalidOperationException("Website build client is not configured.");
-                }
-
-                WebsiteBuildResult result = await websiteBuildClient.BuildAsync(
-                    command == null ? null : command.idea,
-                    command == null ? null : command.style,
-                    command == null ? null : command.siteType,
-                    SetWebsiteBuildStatus,
-                    CancellationToken.None);
-                websitePreviewUrl = result.previewUrl ?? string.Empty;
-                websiteDeployedUrl = result.deployedUrl ?? string.Empty;
-                string visibleUrl = string.IsNullOrWhiteSpace(websiteDeployedUrl) ? websitePreviewUrl : websiteDeployedUrl;
-                SetWebsiteBuildStatus($"Website ready: {Shorten(visibleUrl, 72)}");
-            }
-            catch (Exception ex)
-            {
-                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                SetWebsiteBuildStatus($"Website build failed: {Shorten(message, 72)}");
-                Debug.LogWarning($"Website sandbox build failed: {Shorten(message, 240)}");
-            }
-            finally
-            {
-                websiteBuildInFlight = false;
-            }
-        }
-
-        private void SetWebsiteBuildStatus(string status)
-        {
-            websiteBuildStatusLine = string.IsNullOrWhiteSpace(status) ? WebsiteBuildIdleStatus : status.Trim();
-            SetLastAgentAction(websiteBuildStatusLine);
         }
 
         private void DrainAtmosphereCommands()
@@ -2997,36 +2764,36 @@ namespace Forest
             SetLastAgentAction(workThreadStatusLine);
         }
 
-        private void SetNiaVoiceStatus(string status, bool updateLastAction = true)
+        private void SetRealtimeVoiceStatus(string status, bool updateLastAction = true)
         {
-            niaVoiceStatusLine = string.IsNullOrWhiteSpace(status) ? "Voice idle" : status.Trim();
+            realtimeVoiceStatusLine = string.IsNullOrWhiteSpace(status) ? "Voice idle" : status.Trim();
 
             if (updateLastAction)
             {
-                SetLastAgentAction($"Voice: {niaVoiceStatusLine}");
+                SetLastAgentAction($"Voice: {realtimeVoiceStatusLine}");
             }
         }
 
-        private void UpdateNiaVoiceReadinessStatus()
+        private void UpdateRealtimeVoiceReadinessStatus()
         {
-            if (niaVoiceInFlight || niaVoiceCaptureRoutine != null || (niaVoiceAudioSource != null && niaVoiceAudioSource.isPlaying))
+            if (realtimeVoiceInFlight || realtimeVoiceCaptureRoutine != null || (realtimeVoiceAudioSource != null && realtimeVoiceAudioSource.isPlaying))
             {
                 return;
             }
 
             if (realtimeClient == null || !realtimeClient.HasApiKey)
             {
-                SetNiaVoiceStatus("Missing OpenAI API key.", false);
+                SetRealtimeVoiceStatus("Missing OpenAI API key.", false);
                 return;
             }
 
             if (Microphone.devices == null || Microphone.devices.Length == 0)
             {
-                SetNiaVoiceStatus("No microphone detected.", false);
+                SetRealtimeVoiceStatus("No microphone detected.", false);
                 return;
             }
 
-            SetNiaVoiceStatus("Ready", false);
+            SetRealtimeVoiceStatus("Ready", false);
         }
 
         private void SetLastAgentAction(string status)
@@ -3415,16 +3182,16 @@ namespace Forest
                 cameraObject.AddComponent<AudioListener>();
             }
 
-            niaVoiceAudioSource = camera.GetComponent<AudioSource>();
+            realtimeVoiceAudioSource = camera.GetComponent<AudioSource>();
 
-            if (niaVoiceAudioSource == null)
+            if (realtimeVoiceAudioSource == null)
             {
-                niaVoiceAudioSource = camera.gameObject.AddComponent<AudioSource>();
+                realtimeVoiceAudioSource = camera.gameObject.AddComponent<AudioSource>();
             }
 
-            niaVoiceAudioSource.playOnAwake = false;
-            niaVoiceAudioSource.loop = false;
-            niaVoiceAudioSource.spatialBlend = 0f;
+            realtimeVoiceAudioSource.playOnAwake = false;
+            realtimeVoiceAudioSource.loop = false;
+            realtimeVoiceAudioSource.spatialBlend = 0f;
 
             Quaternion initialCameraRotation = camera.transform.rotation;
             GameObject playerObject = new GameObject("Player");
@@ -3461,79 +3228,6 @@ namespace Forest
         private static float NormalizePitch(float pitch)
         {
             return Mathf.Clamp(Mathf.Repeat(pitch + 180f, 360f) - 180f, -82f, 82f);
-        }
-
-        private void CreateSandboxBox()
-        {
-            if (sandboxBox != null)
-            {
-                sandboxBox.SetActive(true);
-                return;
-            }
-
-            sandboxBoxMaterial = CreateLitMaterial(new Color(0.08f, 0.14f, 0.15f), new Color(0.04f, 0.42f, 0.34f), 0.68f, 0.08f);
-            Vector3 position = Player != null
-                ? Player.transform.position + Player.transform.forward * 7f + Vector3.right * 2.4f
-                : new Vector3(4f, 8f, -10f);
-            position.y = GetSurfaceY(position) + 1.3f;
-            sandboxBox = CreatePrimitive(
-                PrimitiveType.Cube,
-                "Website Sandbox Marker",
-                null,
-                position,
-                Quaternion.Euler(0f, 35f, 0f),
-                new Vector3(1.8f, 1.8f, 1.8f),
-                sandboxBoxMaterial,
-                false);
-        }
-
-        private void UpdateSandboxBoxVisual()
-        {
-            if (!ShouldShowSandboxBox())
-            {
-                if (sandboxBox != null)
-                {
-                    sandboxBox.SetActive(false);
-                }
-
-                return;
-            }
-
-            if (sandboxBox == null)
-            {
-                CreateSandboxBox();
-                return;
-            }
-
-            if (!sandboxBox.activeSelf)
-            {
-                sandboxBox.SetActive(true);
-            }
-
-            float bob = Mathf.Sin(Time.time * (websiteBuildInFlight ? 5.2f : 1.4f)) * (websiteBuildInFlight ? 0.12f : 0.035f);
-            Vector3 position = sandboxBox.transform.position;
-            position.y = GetSurfaceY(position) + 1.3f + bob;
-            sandboxBox.transform.position = position;
-            sandboxBox.transform.Rotate(Vector3.up, (websiteBuildInFlight ? 55f : 10f) * Time.deltaTime, Space.World);
-
-            if (sandboxBoxMaterial != null)
-            {
-                Color emission = websiteBuildInFlight
-                    ? Color.Lerp(new Color(0.03f, 0.4f, 0.34f), new Color(0.15f, 1f, 0.72f), Mathf.PingPong(Time.time * 2.5f, 1f))
-                    : new Color(0.03f, 0.25f, 0.22f);
-
-                if (sandboxBoxMaterial.HasProperty("_EmissionColor"))
-                {
-                    sandboxBoxMaterial.SetColor("_EmissionColor", emission);
-                }
-            }
-        }
-
-        private bool ShouldShowSandboxBox()
-        {
-            return websiteBuildInFlight
-                || !string.IsNullOrWhiteSpace(websitePreviewUrl)
-                || !string.IsNullOrWhiteSpace(websiteDeployedUrl);
         }
 
         private Vector3 GetInitialPlayerPosition(Camera camera)

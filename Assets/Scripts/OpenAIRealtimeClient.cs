@@ -21,28 +21,21 @@ namespace Forest
         private readonly string model;
         private readonly Func<Dictionary<string, object>, string> worldCommandHandler;
         private readonly Func<Dictionary<string, object>, string> workThreadCommandHandler;
-        private readonly Func<Dictionary<string, object>, Task<string>> websiteCommandHandler;
         private readonly SemaphoreSlim socketLock = new SemaphoreSlim(1, 1);
-        private NiaApiClient niaClient;
         private ClientWebSocket answerSocket;
         private string answerSessionVoice;
-        private string answerSessionNiaConfigurationKey;
 
         public OpenAIRealtimeClient(
             string apiKey,
             string model,
-            NiaApiClient niaClient,
             Func<Dictionary<string, object>, string> worldCommandHandler,
-            Func<Dictionary<string, object>, string> workThreadCommandHandler,
-            Func<Dictionary<string, object>, Task<string>> websiteCommandHandler)
+            Func<Dictionary<string, object>, string> workThreadCommandHandler)
         {
             this.apiKey = string.IsNullOrWhiteSpace(apiKey) ? string.Empty : apiKey.Trim();
             this.model = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
-            this.niaClient = niaClient;
             this.worldCommandHandler = worldCommandHandler;
             this.workThreadCommandHandler = workThreadCommandHandler;
-            this.websiteCommandHandler = websiteCommandHandler;
-            Log($"Client configured. model={this.model}, openAiKeySet={!string.IsNullOrWhiteSpace(this.apiKey)}, niaEnabled={CanUseNiaSearch()}, worldCommandsEnabled={CanUseWorldCommands()}, workThreadCommandsEnabled={CanUseWorkThreadCommands()}, websiteCommandsEnabled={CanUseWebsiteCommands()}");
+            Log($"Client configured. model={this.model}, openAiKeySet={!string.IsNullOrWhiteSpace(this.apiKey)}, worldCommandsEnabled={CanUseWorldCommands()}, workThreadCommandsEnabled={CanUseWorkThreadCommands()}");
         }
 
         public bool HasApiKey => !string.IsNullOrWhiteSpace(ReadApiKey());
@@ -53,12 +46,6 @@ namespace Forest
             string normalizedModel = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
             return string.Equals(this.apiKey, normalizedApiKey, StringComparison.Ordinal)
                 && string.Equals(this.model, normalizedModel, StringComparison.Ordinal);
-        }
-
-        public void SetNiaClient(NiaApiClient niaClient)
-        {
-            this.niaClient = niaClient;
-            Log($"NIA client updated. niaEnabled={CanUseNiaSearch()}");
         }
 
         public async Task WarmUpAnswerSessionAsync(string voice, CancellationToken token)
@@ -72,7 +59,7 @@ namespace Forest
             }
 
             string safeVoice = string.IsNullOrWhiteSpace(voice) ? DefaultVoice : voice.Trim();
-            Log($"Warm-up requested. model={model}, voice={safeVoice}, niaEnabled={CanUseNiaSearch()}");
+            Log($"Warm-up requested. model={model}, voice={safeVoice}");
 
             using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(20));
@@ -115,7 +102,7 @@ namespace Forest
                 : instructions.Trim();
             float[] realtimeSamples = ResampleMono(monoSamples, sampleRate, RealtimeInputSampleRate);
             string base64Audio = Convert.ToBase64String(FloatToPcm16(realtimeSamples));
-            Log($"Voice question started. inputSamples={monoSamples.Length}, inputRate={sampleRate}, realtimeSamples={realtimeSamples.Length}, model={model}, voice={safeVoice}, niaEnabled={CanUseNiaSearch()}");
+            Log($"Voice question started. inputSamples={monoSamples.Length}, inputRate={sampleRate}, realtimeSamples={realtimeSamples.Length}, model={model}, voice={safeVoice}");
 
             using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(45));
@@ -195,224 +182,13 @@ namespace Forest
             }
         }
 
-        public async Task<string> TranscribeQuestionAsync(float[] monoSamples, int sampleRate, CancellationToken token)
-        {
-            string apiKey = ReadApiKey();
-
-            if (string.IsNullOrWhiteSpace(apiKey))
-            {
-                throw new InvalidOperationException($"Set openAiApiKey in {ForestUserSettings.RelativePath} to enable voice questions.");
-            }
-
-            if (monoSamples == null || monoSamples.Length == 0)
-            {
-                throw new ArgumentException("Voice audio cannot be empty.", nameof(monoSamples));
-            }
-
-            if (sampleRate <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(sampleRate), "Voice audio sample rate must be positive.");
-            }
-
-            float[] realtimeSamples = ResampleMono(monoSamples, sampleRate, RealtimeInputSampleRate);
-            string base64Audio = Convert.ToBase64String(FloatToPcm16(realtimeSamples));
-
-            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(45));
-            CancellationToken requestToken = timeoutCts.Token;
-
-            using ClientWebSocket socket = new ClientWebSocket();
-            socket.Options.SetRequestHeader("Authorization", $"Bearer {apiKey}");
-
-            Uri uri = new Uri($"wss://api.openai.com/v1/realtime?model={Uri.EscapeDataString(model)}");
-            Log($"Transcription socket connecting. model={model}, inputSamples={monoSamples.Length}, inputRate={sampleRate}");
-            await socket.ConnectAsync(uri, requestToken);
-            Log($"Transcription socket connected. state={socket.State}");
-
-            await WaitForEventTypeAsync(socket, "session.created", requestToken);
-            await SendJsonAsync(socket, BuildSessionUpdate(), requestToken);
-            await WaitForEventTypeAsync(socket, "session.updated", requestToken);
-            Log("Transcription realtime session updated.");
-
-            await SendJsonAsync(
-                socket,
-                new Dictionary<string, object>
-                {
-                    ["type"] = "input_audio_buffer.append",
-                    ["audio"] = base64Audio
-                },
-                requestToken);
-
-            await SendJsonAsync(socket, new Dictionary<string, object> { ["type"] = "input_audio_buffer.commit" }, requestToken);
-            await SendJsonAsync(
-                socket,
-                new Dictionary<string, object>
-                {
-                    ["type"] = "response.create",
-                    ["response"] = new Dictionary<string, object>
-                    {
-                        ["output_modalities"] = new List<object> { "text" },
-                        ["instructions"] = "Listen to the user's audio and return only the user's question or request as concise text. Do not answer it."
-                    }
-                },
-                requestToken);
-
-            string response = await ReadResponseTextAsync(socket, requestToken);
-
-            if (socket.State == WebSocketState.Open)
-            {
-                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "voice question complete", CancellationToken.None);
-                Log("Transcription socket closed normally.");
-            }
-
-            string cleaned = CleanTranscript(response);
-
-            if (string.IsNullOrWhiteSpace(cleaned))
-            {
-                throw new InvalidOperationException("OpenAI Realtime returned no usable question text.");
-            }
-
-            return cleaned;
-        }
-
-        public async Task<RealtimeAudioResult> GenerateSpeechAsync(string text, string voice, CancellationToken token)
-        {
-            string apiKey = ReadApiKey();
-
-            if (string.IsNullOrWhiteSpace(apiKey))
-            {
-                throw new InvalidOperationException($"Set openAiApiKey in {ForestUserSettings.RelativePath} to enable voice questions.");
-            }
-
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                throw new ArgumentException("Speech text cannot be empty.", nameof(text));
-            }
-
-            string safeVoice = string.IsNullOrWhiteSpace(voice) ? DefaultVoice : voice.Trim();
-
-            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(45));
-            CancellationToken requestToken = timeoutCts.Token;
-
-            using ClientWebSocket socket = new ClientWebSocket();
-            socket.Options.SetRequestHeader("Authorization", $"Bearer {apiKey}");
-
-            Uri uri = new Uri($"wss://api.openai.com/v1/realtime?model={Uri.EscapeDataString(model)}");
-            Log($"Speech socket connecting. model={model}, voice={safeVoice}, textLength={text.Trim().Length}");
-            await socket.ConnectAsync(uri, requestToken);
-            Log($"Speech socket connected. state={socket.State}");
-
-            await WaitForEventTypeAsync(socket, "session.created", requestToken);
-            await SendJsonAsync(socket, BuildSpeechSessionUpdate(safeVoice), requestToken);
-            await WaitForEventTypeAsync(socket, "session.updated", requestToken);
-            Log("Speech realtime session updated.");
-            await SendJsonAsync(socket, BuildSpeechResponseCreate(text.Trim()), requestToken);
-
-            RealtimeAudioResult response = await ReadAudioResponseAsync(socket, null, requestToken);
-
-            if (socket.State == WebSocketState.Open)
-            {
-                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "speech complete", CancellationToken.None);
-                Log("Speech socket closed normally.");
-            }
-
-            if (response.Samples == null || response.Samples.Length == 0)
-            {
-                throw new InvalidOperationException("OpenAI Realtime returned no playable audio.");
-            }
-
-            return response;
-        }
-
-        public async Task<RealtimeAudioResult> SpeakBackgroundUpdateAsync(string text, string worldContext, string voice, CancellationToken token)
-        {
-            string apiKey = ReadApiKey();
-
-            if (string.IsNullOrWhiteSpace(apiKey))
-            {
-                throw new InvalidOperationException($"Set openAiApiKey in {ForestUserSettings.RelativePath} to enable background voice updates.");
-            }
-
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                throw new ArgumentException("Background update text cannot be empty.", nameof(text));
-            }
-
-            string safeVoice = string.IsNullOrWhiteSpace(voice) ? DefaultVoice : voice.Trim();
-            string safeContext = string.IsNullOrWhiteSpace(worldContext) ? "No additional game context." : worldContext.Trim();
-
-            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(45));
-            CancellationToken requestToken = timeoutCts.Token;
-
-            using ClientWebSocket socket = new ClientWebSocket();
-            socket.Options.SetRequestHeader("Authorization", $"Bearer {apiKey}");
-
-            Uri uri = new Uri($"wss://api.openai.com/v1/realtime?model={Uri.EscapeDataString(model)}");
-            Log($"Background update socket connecting. model={model}, voice={safeVoice}, textLength={text.Trim().Length}");
-            await socket.ConnectAsync(uri, requestToken);
-            Log($"Background update socket connected. state={socket.State}");
-
-            await WaitForEventTypeAsync(socket, "session.created", requestToken);
-            await SendJsonAsync(socket, BuildBackgroundUpdateSessionUpdate(safeVoice), requestToken);
-            await WaitForEventTypeAsync(socket, "session.updated", requestToken);
-            await SendJsonAsync(socket, BuildBackgroundUpdateResponseCreate(text.Trim(), safeContext), requestToken);
-
-            RealtimeAudioResult response = await ReadAudioResponseAsync(socket, null, requestToken);
-
-            if (socket.State == WebSocketState.Open)
-            {
-                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "background update complete", CancellationToken.None);
-                Log("Background update socket closed normally.");
-            }
-
-            if (response.Samples == null || response.Samples.Length == 0)
-            {
-                throw new InvalidOperationException("OpenAI Realtime returned no playable background update audio.");
-            }
-
-            return response;
-        }
-
-        private Dictionary<string, object> BuildSessionUpdate()
-        {
-            return new Dictionary<string, object>
-            {
-                ["type"] = "session.update",
-                ["session"] = new Dictionary<string, object>
-                {
-                    ["type"] = "realtime",
-                    ["model"] = model,
-                    ["output_modalities"] = new List<object> { "text" },
-                    ["audio"] = new Dictionary<string, object>
-                    {
-                        ["input"] = new Dictionary<string, object>
-                        {
-                            ["format"] = new Dictionary<string, object>
-                            {
-                                ["type"] = "audio/pcm",
-                                ["rate"] = RealtimeInputSampleRate
-                            },
-                            ["turn_detection"] = null
-                        }
-                    },
-                    ["instructions"] = "You convert short player voice clips into clean text requests for a Unity game assistant."
-                }
-            };
-        }
-
         private async Task EnsureAnswerSessionAsync(string apiKey, string voice, CancellationToken token)
         {
-            string currentNiaConfigurationKey = CurrentNiaConfigurationKey();
-            bool niaEnabled = CanUseNiaSearch();
-
             if (answerSocket != null
                 && answerSocket.State == WebSocketState.Open
-                && string.Equals(answerSessionVoice, voice, StringComparison.Ordinal)
-                && string.Equals(answerSessionNiaConfigurationKey, currentNiaConfigurationKey, StringComparison.Ordinal))
+                && string.Equals(answerSessionVoice, voice, StringComparison.Ordinal))
             {
-                Log($"Reusing realtime answer session. state={answerSocket.State}, voice={voice}, niaEnabled={niaEnabled}");
+                Log($"Reusing realtime answer session. state={answerSocket.State}, voice={voice}");
                 return;
             }
 
@@ -422,7 +198,7 @@ namespace Forest
             answerSocket.Options.SetRequestHeader("Authorization", $"Bearer {apiKey}");
 
             Uri uri = new Uri($"wss://api.openai.com/v1/realtime?model={Uri.EscapeDataString(model)}");
-            Log($"Answer socket connecting. model={model}, voice={voice}, niaEnabled={niaEnabled}");
+            Log($"Answer socket connecting. model={model}, voice={voice}");
             await answerSocket.ConnectAsync(uri, token);
             Log($"Answer socket connected. state={answerSocket.State}");
 
@@ -431,8 +207,7 @@ namespace Forest
             await WaitForEventTypeAsync(answerSocket, "session.updated", token);
 
             answerSessionVoice = voice;
-            answerSessionNiaConfigurationKey = currentNiaConfigurationKey;
-            Log($"Answer realtime session updated. voice={voice}, niaToolRegistered={niaEnabled}");
+            Log($"Answer realtime session updated. voice={voice}");
         }
 
         private async Task CloseAnswerSessionAsync(string reason)
@@ -440,7 +215,6 @@ namespace Forest
             ClientWebSocket socket = answerSocket;
             answerSocket = null;
             answerSessionVoice = null;
-            answerSessionNiaConfigurationKey = null;
 
             if (socket == null)
             {
@@ -516,11 +290,6 @@ namespace Forest
         {
             string instructions = "Answer short push-to-talk voice questions and requests for the Unity game Forest.";
 
-            if (CanUseNiaSearch())
-            {
-                instructions += " Route questions about Codex threads, animals, archived animals, nearby/facing things, forest state, local app-server state, or the current Forest world to the provided game context only. Never call nia_search for those local thread or animal questions. For all other external knowledge, current information, technical docs, code, libraries, research, or anything that benefits from search, call nia_search before answering.";
-            }
-
             if (CanUseWorldCommands())
             {
                 instructions += " When the player asks to change the world, weather, fog, rain, storm, snow, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, day, dawn, sunset, or night, call set_world_atmosphere before speaking.";
@@ -531,22 +300,12 @@ namespace Forest
                 instructions += " When the player asks a question, reports a bug, requests an investigation, or asks for a new feature specifically about this game/project, collect their exact request and call create_game_thread before speaking.";
             }
 
-            if (CanUseWebsiteCommands())
-            {
-                instructions += " When the player asks you to create, build, make, generate, preview, or deploy a website, landing page, portfolio, product page, microsite, web page, or web app, call create_demo_website before speaking; the tool builds in a Tensorlake sandbox and deploys to InsForge when InsForge credentials are configured.";
-            }
-
             return instructions;
         }
 
         private List<object> BuildRealtimeTools()
         {
             List<object> tools = new List<object>();
-
-            if (CanUseNiaSearch())
-            {
-                tools.Add(BuildNiaSearchTool());
-            }
 
             if (CanUseWorldCommands())
             {
@@ -558,41 +317,7 @@ namespace Forest
                 tools.Add(BuildWorkThreadTool());
             }
 
-            if (CanUseWebsiteCommands())
-            {
-                tools.Add(BuildDemoWebsiteTool());
-            }
-
             return tools;
-        }
-
-        private static Dictionary<string, object> BuildNiaSearchTool()
-        {
-            return new Dictionary<string, object>
-            {
-                ["type"] = "function",
-                ["name"] = "nia_search",
-                ["description"] = "Search Nia for external knowledge only. Do not use for local Forest/Codex app-server questions about threads, animals, archived animals, nearby/facing objects, forest state, or current game context. Use universal for Nia's pre-indexed repositories, docs, and papers; web for current web information; query for configured Nia workspace sources; deep for multi-step research.",
-                ["parameters"] = new Dictionary<string, object>
-                {
-                    ["type"] = "object",
-                    ["properties"] = new Dictionary<string, object>
-                    {
-                        ["query"] = new Dictionary<string, object>
-                        {
-                            ["type"] = "string",
-                            ["description"] = "A concise natural-language search query."
-                        },
-                        ["mode"] = new Dictionary<string, object>
-                        {
-                            ["type"] = "string",
-                            ["enum"] = new List<object> { "universal", "web", "query", "deep" },
-                            ["description"] = "Search mode. Prefer universal unless the user specifically needs live web/current information, configured workspace sources, or deep research."
-                        }
-                    },
-                    ["required"] = new List<object> { "query" }
-                }
-            };
         }
 
         private static Dictionary<string, object> BuildWorldAtmosphereTool()
@@ -662,39 +387,6 @@ namespace Forest
             };
         }
 
-        private static Dictionary<string, object> BuildDemoWebsiteTool()
-        {
-            return new Dictionary<string, object>
-            {
-                ["type"] = "function",
-                ["name"] = "create_demo_website",
-                ["description"] = "Start a Tensorlake sandbox job that creates a small demo website from the player's spoken idea, then deploy it to InsForge when InsForge credentials are configured. Use this for requests to make, build, generate, preview, or deploy a website or web page.",
-                ["parameters"] = new Dictionary<string, object>
-                {
-                    ["type"] = "object",
-                    ["properties"] = new Dictionary<string, object>
-                    {
-                        ["idea"] = new Dictionary<string, object>
-                        {
-                            ["type"] = "string",
-                            ["description"] = "The user's website idea in one concise sentence."
-                        },
-                        ["style"] = new Dictionary<string, object>
-                        {
-                            ["type"] = "string",
-                            ["description"] = "Optional visual style hints, such as playful, editorial, minimal, cinematic, retro, or luxurious."
-                        },
-                        ["site_type"] = new Dictionary<string, object>
-                        {
-                            ["type"] = "string",
-                            ["description"] = "Optional site category, such as landing page, portfolio, product page, event site, gallery, or dashboard."
-                        }
-                    },
-                    ["required"] = new List<object> { "idea" }
-                }
-            };
-        }
-
         private static Dictionary<string, object> BuildAnswerResponseCreate(string instructions)
         {
             return new Dictionary<string, object>
@@ -704,139 +396,6 @@ namespace Forest
                 {
                     ["output_modalities"] = new List<object> { "audio" },
                     ["instructions"] = instructions,
-                    ["audio"] = new Dictionary<string, object>
-                    {
-                        ["output"] = new Dictionary<string, object>
-                        {
-                            ["format"] = new Dictionary<string, object>
-                            {
-                                ["type"] = "audio/pcm",
-                                ["rate"] = RealtimeOutputSampleRate
-                            }
-                        }
-                    }
-                }
-            };
-        }
-
-        private Dictionary<string, object> BuildSpeechSessionUpdate(string voice)
-        {
-            return new Dictionary<string, object>
-            {
-                ["type"] = "session.update",
-                ["session"] = new Dictionary<string, object>
-                {
-                    ["type"] = "realtime",
-                    ["model"] = model,
-                    ["output_modalities"] = new List<object> { "audio" },
-                    ["audio"] = new Dictionary<string, object>
-                    {
-                        ["output"] = new Dictionary<string, object>
-                        {
-                            ["format"] = new Dictionary<string, object>
-                            {
-                                ["type"] = "audio/pcm",
-                                ["rate"] = RealtimeOutputSampleRate
-                            },
-                            ["voice"] = voice
-                        }
-                    },
-                    ["instructions"] = "Speak short Unity game assistant answers warmly and clearly."
-                }
-            };
-        }
-
-        private Dictionary<string, object> BuildBackgroundUpdateSessionUpdate(string voice)
-        {
-            return new Dictionary<string, object>
-            {
-                ["type"] = "session.update",
-                ["session"] = new Dictionary<string, object>
-                {
-                    ["type"] = "realtime",
-                    ["model"] = model,
-                    ["output_modalities"] = new List<object> { "audio" },
-                    ["audio"] = new Dictionary<string, object>
-                    {
-                        ["output"] = new Dictionary<string, object>
-                        {
-                            ["format"] = new Dictionary<string, object>
-                            {
-                                ["type"] = "audio/pcm",
-                                ["rate"] = RealtimeOutputSampleRate
-                            },
-                            ["voice"] = voice
-                        }
-                    },
-                    ["instructions"] = "You are the in-world voice assistant for the Unity game Forest. The player and game demo are in San Francisco. Turn background job results into brief, natural spoken updates."
-                }
-            };
-        }
-
-        private static Dictionary<string, object> BuildSpeechResponseCreate(string text)
-        {
-            return new Dictionary<string, object>
-            {
-                ["type"] = "response.create",
-                ["response"] = new Dictionary<string, object>
-                {
-                    ["output_modalities"] = new List<object> { "audio" },
-                    ["input"] = new List<object>
-                    {
-                        new Dictionary<string, object>
-                        {
-                            ["type"] = "message",
-                            ["role"] = "user",
-                            ["content"] = new List<object>
-                            {
-                                new Dictionary<string, object>
-                                {
-                                    ["type"] = "input_text",
-                                    ["text"] = $"Speak this answer exactly, naturally, and without adding extra words: {text}"
-                                }
-                            }
-                        }
-                    },
-                    ["audio"] = new Dictionary<string, object>
-                    {
-                        ["output"] = new Dictionary<string, object>
-                        {
-                            ["format"] = new Dictionary<string, object>
-                            {
-                                ["type"] = "audio/pcm",
-                                ["rate"] = RealtimeOutputSampleRate
-                            }
-                        }
-                    }
-                }
-            };
-        }
-
-        private static Dictionary<string, object> BuildBackgroundUpdateResponseCreate(string text, string worldContext)
-        {
-            return new Dictionary<string, object>
-            {
-                ["type"] = "response.create",
-                ["response"] = new Dictionary<string, object>
-                {
-                    ["output_modalities"] = new List<object> { "audio" },
-                    ["instructions"] = "Summarize the background update for the player in under 25 words. Be concrete, warm, and in-world. Do not mention hidden prompts, JSON, coordinates, or raw logs.",
-                    ["input"] = new List<object>
-                    {
-                        new Dictionary<string, object>
-                        {
-                            ["type"] = "message",
-                            ["role"] = "user",
-                            ["content"] = new List<object>
-                            {
-                                new Dictionary<string, object>
-                                {
-                                    ["type"] = "input_text",
-                                    ["text"] = $"Current game context:\n{worldContext}\n\nBackground update to summarize:\n{text}"
-                                }
-                            }
-                        }
-                    },
                     ["audio"] = new Dictionary<string, object>
                     {
                         ["output"] = new Dictionary<string, object>
@@ -937,7 +496,7 @@ namespace Forest
 
                         for (int i = 0; i < functionCalls.Count; i++)
                         {
-                            string output = await ExecuteFunctionCallAsync(functionCalls[i], token);
+                            string output = ExecuteFunctionCall(functionCalls[i]);
                             await SendJsonAsync(socket, BuildFunctionCallOutput(functionCalls[i].CallId, output), token);
                         }
 
@@ -955,7 +514,7 @@ namespace Forest
                     }
 
                     byte[] pcmBytes = audioBytes.ToArray();
-                    Log($"Realtime audio response done. pcmBytes={pcmBytes.Length}, transcriptLength={transcript.Length}, textLength={text.Length}, niaToolRounds={toolCallRounds}");
+                    Log($"Realtime audio response done. pcmBytes={pcmBytes.Length}, transcriptLength={transcript.Length}, textLength={text.Length}, toolRounds={toolCallRounds}");
                     return new RealtimeAudioResult
                     {
                         Samples = Pcm16ToFloat(pcmBytes),
@@ -970,7 +529,7 @@ namespace Forest
             throw new InvalidOperationException("OpenAI Realtime socket closed before returning audio.");
         }
 
-        private async Task<string> ExecuteFunctionCallAsync(RealtimeFunctionCall functionCall, CancellationToken token)
+        private string ExecuteFunctionCall(RealtimeFunctionCall functionCall)
         {
             if (functionCall == null)
             {
@@ -990,65 +549,12 @@ namespace Forest
                 return ExecuteWorkThreadCommand(functionCall);
             }
 
-            if (string.Equals(functionCall.Name, "create_demo_website", StringComparison.Ordinal))
+            string toolName = functionCall == null ? "null" : functionCall.Name;
+            LogWarning($"Unsupported realtime tool call requested. name={toolName}");
+            return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
             {
-                return await ExecuteWebsiteCommandAsync(functionCall);
-            }
-
-            if (!string.Equals(functionCall.Name, "nia_search", StringComparison.Ordinal))
-            {
-                string toolName = functionCall == null ? "null" : functionCall.Name;
-                LogWarning($"Unsupported realtime tool call requested. name={toolName}");
-                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
-                {
-                    ["error"] = "Unsupported realtime tool call."
-                });
-            }
-
-            if (!CanUseNiaSearch())
-            {
-                LogWarning("Realtime requested NIA search, but niaApiKey is not configured.");
-                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
-                {
-                    ["error"] = $"Set niaApiKey in {ForestUserSettings.RelativePath} to enable Nia search."
-                });
-            }
-
-            Dictionary<string, object> arguments = ForestDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>;
-            string query = ReadString(arguments, "query") ?? ReadString(arguments, "question");
-            string mode = ReadString(arguments, "mode");
-
-            if (string.IsNullOrWhiteSpace(query))
-            {
-                LogWarning("Realtime requested NIA search without a query.");
-                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
-                {
-                    ["error"] = "Nia search requires a non-empty query."
-                });
-            }
-
-            try
-            {
-                Log($"NIA search started from realtime tool. mode={NormalizedModeForLog(mode)}, query=\"{Shorten(query.Trim(), 120)}\"");
-                NiaSearchResult result = await niaClient.QueryAsync(query, mode, token);
-                int sourceCount = result.SourceLabels == null ? 0 : result.SourceLabels.Length;
-                Log($"NIA search completed. answerLength={(result.Answer ?? string.Empty).Length}, sourceCount={sourceCount}");
-                Dictionary<string, object> output = new Dictionary<string, object>
-                {
-                    ["answer"] = result.Answer ?? string.Empty,
-                    ["sources"] = ToObjectList(result.SourceLabels)
-                };
-                return ForestDirectorBridge.MiniJson.Serialize(output);
-            }
-            catch (Exception ex)
-            {
-                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                LogWarning($"NIA search failed. {Shorten(message, 240)}");
-                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
-                {
-                    ["error"] = Shorten(message, 400)
-                });
-            }
+                ["error"] = "Unsupported realtime tool call."
+            });
         }
 
         private string ExecuteWorkThreadCommand(RealtimeFunctionCall functionCall)
@@ -1107,34 +613,6 @@ namespace Forest
             }
         }
 
-        private async Task<string> ExecuteWebsiteCommandAsync(RealtimeFunctionCall functionCall)
-        {
-            if (!CanUseWebsiteCommands())
-            {
-                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
-                {
-                    ["error"] = "The Unity website sandbox bridge is unavailable."
-                });
-            }
-
-            Dictionary<string, object> arguments = ForestDirectorBridge.MiniJson.Deserialize(functionCall.Arguments) as Dictionary<string, object>
-                ?? new Dictionary<string, object>();
-
-            try
-            {
-                string output = await websiteCommandHandler(arguments);
-                return string.IsNullOrWhiteSpace(output) ? "{}" : output;
-            }
-            catch (Exception ex)
-            {
-                string message = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-                return ForestDirectorBridge.MiniJson.Serialize(new Dictionary<string, object>
-                {
-                    ["error"] = Shorten(message, 400)
-                });
-            }
-        }
-
         private static Dictionary<string, object> BuildFunctionCallOutput(string callId, string output)
         {
             return new Dictionary<string, object>
@@ -1165,11 +643,6 @@ namespace Forest
             return false;
         }
 
-        private bool CanUseNiaSearch()
-        {
-            return niaClient != null && niaClient.HasApiKey;
-        }
-
         private bool CanUseWorldCommands()
         {
             return worldCommandHandler != null;
@@ -1178,16 +651,6 @@ namespace Forest
         private bool CanUseWorkThreadCommands()
         {
             return workThreadCommandHandler != null;
-        }
-
-        private bool CanUseWebsiteCommands()
-        {
-            return websiteCommandHandler != null;
-        }
-
-        private string CurrentNiaConfigurationKey()
-        {
-            return CanUseNiaSearch() ? niaClient.ConfigurationKey : string.Empty;
         }
 
         private static void Log(string message)
@@ -1208,31 +671,6 @@ namespace Forest
             }
 
             return string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-        }
-
-        private static string NormalizedModeForLog(string mode)
-        {
-            return string.IsNullOrWhiteSpace(mode) ? NiaApiClient.DefaultSearchMode : mode.Trim();
-        }
-
-        private static List<object> ToObjectList(string[] values)
-        {
-            List<object> list = new List<object>();
-
-            if (values == null)
-            {
-                return list;
-            }
-
-            for (int i = 0; i < values.Length; i++)
-            {
-                if (!string.IsNullOrWhiteSpace(values[i]))
-                {
-                    list.Add(values[i]);
-                }
-            }
-
-            return list;
         }
 
         private static List<RealtimeFunctionCall> ExtractFunctionCalls(Dictionary<string, object> message)
@@ -1273,47 +711,6 @@ namespace Forest
             }
 
             return functionCalls;
-        }
-
-        private static async Task<string> ReadResponseTextAsync(ClientWebSocket socket, CancellationToken token)
-        {
-            StringBuilder incrementalText = new StringBuilder();
-
-            while (socket.State == WebSocketState.Open)
-            {
-                Dictionary<string, object> message = await ReceiveJsonAsync(socket, token);
-                string type = ReadString(message, "type");
-
-                if (string.Equals(type, "error", StringComparison.Ordinal))
-                {
-                    string detail = ReadString(message, "error", "message") ?? "OpenAI Realtime request failed.";
-                    throw new InvalidOperationException(detail);
-                }
-
-                if (string.Equals(type, "response.output_text.delta", StringComparison.Ordinal))
-                {
-                    incrementalText.Append(ReadString(message, "delta"));
-                    continue;
-                }
-
-                if (string.Equals(type, "response.output_text.done", StringComparison.Ordinal))
-                {
-                    string text = ReadString(message, "text");
-
-                    if (!string.IsNullOrWhiteSpace(text))
-                    {
-                        return text;
-                    }
-                }
-
-                if (string.Equals(type, "response.done", StringComparison.Ordinal))
-                {
-                    string finalText = ExtractResponseText(message);
-                    return string.IsNullOrWhiteSpace(finalText) ? incrementalText.ToString() : finalText;
-                }
-            }
-
-            throw new InvalidOperationException("OpenAI Realtime socket closed before returning a response.");
         }
 
         private static async Task WaitForEventTypeAsync(ClientWebSocket socket, string expectedType, CancellationToken token)
@@ -1374,19 +771,6 @@ namespace Forest
             return message;
         }
 
-        private static string ExtractResponseText(Dictionary<string, object> message)
-        {
-            object response = Traverse(message, "response");
-            string firstText = FindFirstStringByKey(response, "text", 6);
-
-            if (!string.IsNullOrWhiteSpace(firstText))
-            {
-                return firstText;
-            }
-
-            return FindFirstStringByKey(response, "transcript", 6);
-        }
-
         private static object Traverse(Dictionary<string, object> root, params string[] path)
         {
             object current = root;
@@ -1400,49 +784,6 @@ namespace Forest
             }
 
             return current;
-        }
-
-        private static string FindFirstStringByKey(object value, string keyName, int depth)
-        {
-            if (value == null || depth < 0)
-            {
-                return null;
-            }
-
-            if (value is Dictionary<string, object> dictionary)
-            {
-                foreach (KeyValuePair<string, object> pair in dictionary)
-                {
-                    if (string.Equals(pair.Key, keyName, StringComparison.Ordinal) && pair.Value is string text && !string.IsNullOrWhiteSpace(text))
-                    {
-                        return text;
-                    }
-                }
-
-                foreach (KeyValuePair<string, object> pair in dictionary)
-                {
-                    string nested = FindFirstStringByKey(pair.Value, keyName, depth - 1);
-
-                    if (!string.IsNullOrWhiteSpace(nested))
-                    {
-                        return nested;
-                    }
-                }
-            }
-            else if (value is List<object> list)
-            {
-                for (int i = 0; i < list.Count; i++)
-                {
-                    string nested = FindFirstStringByKey(list[i], keyName, depth - 1);
-
-                    if (!string.IsNullOrWhiteSpace(nested))
-                    {
-                        return nested;
-                    }
-                }
-            }
-
-            return null;
         }
 
         private static string ReadString(Dictionary<string, object> root, params string[] path)
@@ -1521,17 +862,6 @@ namespace Forest
             }
 
             return output;
-        }
-
-        private static string CleanTranscript(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return string.Empty;
-            }
-
-            string cleaned = text.Trim().Trim('"', '\'', ' ', '\n', '\r', '\t');
-            return cleaned;
         }
 
         private static string Shorten(string text, int maxLength)

@@ -88,7 +88,7 @@ Active pets use terrain-grounded movement when `director.UsesSceneTerrain` is tr
 
 ## Voice And Secrets
 
-Optional voice/search settings are loaded from:
+Optional voice settings are loaded from:
 
 ```text
 UserSettings/ForestApiSettings.json
@@ -96,7 +96,7 @@ UserSettings/ForestApiSettings.json
 
 This file may contain API keys and must not be committed. Expected fields are defined in `ForestUserSettings`.
 
-OpenAI realtime voice is handled by `OpenAIRealtimeClient`. Optional external search is handled by `NiaApiClient`.
+OpenAI realtime voice is handled by `OpenAIRealtimeClient`.
 
 ## Git LFS
 
@@ -132,7 +132,7 @@ Run from Unity Test Runner or from a local Unity executable:
   -quit
 ```
 
-Unity batchmode may fail in sandboxed shells if licensing is not initialized. If that happens, say so and ask the user to verify in the editor.
+Unity batchmode may fail in restricted shells if licensing is not initialized. If that happens, say so and ask the user to verify in the editor.
 
 ## Commit Conventions
 
