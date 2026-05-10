@@ -47,10 +47,10 @@ namespace Forest
         private GUIStyle speechBubbleShadowStyle;
         private GUIStyle loadingTitleStyle;
         private GUIStyle loadingStatusStyle;
-        private GUIStyle miniMapPanelStyle;
+        private GUIStyle miniMapCompassLabelStyle;
+        private Texture2D miniMapFrameTexture;
         private Texture2D miniMapPlayerDotTexture;
-        private Texture2D miniMapActiveAnimalDotTexture;
-        private Texture2D miniMapArchivedAnimalDotTexture;
+        private Texture2D miniMapOtherDotTexture;
         private bool threadHudVisible = true;
 
         private Material groundMaterial;
@@ -808,46 +808,42 @@ namespace Forest
                 normal = { textColor = new Color(0.76f, 0.95f, 1f) }
             };
 
-            miniMapPanelStyle = new GUIStyle(GUI.skin.box)
+            miniMapCompassLabelStyle = new GUIStyle(labelStyle)
             {
-                border = new RectOffset(18, 18, 18, 18),
-                padding = new RectOffset(10, 10, 10, 10)
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 17,
+                fontStyle = FontStyle.Bold,
+                clipping = TextClipping.Clip,
+                normal = { textColor = new Color(0.92f, 1f, 1f, 0.96f) }
             };
-            miniMapPanelStyle.normal.background = CreateRoundedRectTexture(
-                48,
-                48,
-                18f,
-                new Color(0.01f, 0.05f, 0.07f, 0.76f),
-                new Color(0.18f, 0.86f, 0.9f, 0.5f),
-                1f);
 
-            miniMapPlayerDotTexture = CreateCircleTexture(18, new Color(0.95f, 1f, 0.92f, 1f), new Color(0.12f, 0.25f, 0.23f, 1f), 2f);
-            miniMapActiveAnimalDotTexture = CreateCircleTexture(14, new Color(0.2f, 0.95f, 1f, 0.96f), new Color(0.78f, 1f, 1f, 0.82f), 1f);
-            miniMapArchivedAnimalDotTexture = CreateCircleTexture(12, new Color(1f, 0.72f, 0.32f, 0.95f), new Color(1f, 0.92f, 0.64f, 0.78f), 1f);
+            miniMapFrameTexture = CreateMiniMapFrameTexture(
+                192,
+                new Color(0.01f, 0.07f, 0.08f, 0.42f),
+                new Color(0f, 0.01f, 0.015f, 0.38f),
+                new Color(0.28f, 0.96f, 1f, 0.86f),
+                2f);
+            miniMapPlayerDotTexture = CreateCircleTexture(22, new Color(0.96f, 0.98f, 0.96f, 1f), new Color(0.12f, 0.18f, 0.18f, 0.86f), 1.5f);
+            miniMapOtherDotTexture = CreateCircleTexture(14, new Color(0.25f, 1f, 0.96f, 0.96f), new Color(0.73f, 1f, 1f, 0.82f), 1f);
         }
 
         private void DrawMiniMap()
         {
             const float mapRangeMeters = 90f;
-            float size = Mathf.Clamp(Mathf.Min(Screen.width, Screen.height) * 0.19f, 118f, 158f);
+            float size = Mathf.Clamp(Mathf.Min(Screen.width, Screen.height) * 0.24f, 138f, 198f);
             Rect panelRect = new Rect(Screen.width - size - 12f, 12f, size, size);
-            Rect mapRect = new Rect(panelRect.x + 10f, panelRect.y + 10f, panelRect.width - 20f, panelRect.height - 20f);
+            Rect mapRect = new Rect(panelRect.x + 16f, panelRect.y + 16f, panelRect.width - 32f, panelRect.height - 32f);
             Vector2 center = mapRect.center;
             float radius = Mathf.Min(mapRect.width, mapRect.height) * 0.5f;
 
-            GUI.Box(panelRect, GUIContent.none, miniMapPanelStyle);
-
-            Color previousColor = GUI.color;
-            GUI.color = new Color(0.1f, 0.42f, 0.48f, 0.24f);
-            GUI.DrawTexture(new Rect(center.x - 0.5f, mapRect.y + 2f, 1f, mapRect.height - 4f), Texture2D.whiteTexture);
-            GUI.DrawTexture(new Rect(mapRect.x + 2f, center.y - 0.5f, mapRect.width - 4f, 1f), Texture2D.whiteTexture);
-            GUI.color = previousColor;
+            GUI.DrawTexture(panelRect, miniMapFrameTexture);
+            DrawMiniMapCompassLabels(center, radius + 12f);
 
             foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
             {
                 if (pair.Value != null)
                 {
-                    DrawMiniMapDot(pair.Value.transform.position, center, radius, mapRangeMeters, miniMapActiveAnimalDotTexture, 8f);
+                    DrawMiniMapDot(pair.Value.transform.position, center, radius, mapRangeMeters, miniMapOtherDotTexture, 8f);
                 }
             }
 
@@ -855,11 +851,11 @@ namespace Forest
             {
                 if (pair.Value != null)
                 {
-                    DrawMiniMapDot(pair.Value.transform.position, center, radius, mapRangeMeters, miniMapArchivedAnimalDotTexture, 7f);
+                    DrawMiniMapDot(pair.Value.transform.position, center, radius, mapRangeMeters, miniMapOtherDotTexture, 8f);
                 }
             }
 
-            DrawTextureCentered(center, miniMapPlayerDotTexture, 12f);
+            DrawTextureCentered(center, miniMapPlayerDotTexture, 15f);
         }
 
         private void DrawMiniMapDot(Vector3 worldPosition, Vector2 center, float radius, float mapRangeMeters, Texture2D texture, float size)
@@ -870,7 +866,7 @@ namespace Forest
             }
 
             Vector3 offset = worldPosition - Player.transform.position;
-            Vector2 mapOffset = new Vector2(offset.x, -offset.z) / Mathf.Max(1f, mapRangeMeters) * radius;
+            Vector2 mapOffset = ProjectWorldOffsetToMiniMap(offset) / Mathf.Max(1f, mapRangeMeters) * radius;
 
             if (mapOffset.sqrMagnitude > radius * radius)
             {
@@ -878,6 +874,63 @@ namespace Forest
             }
 
             DrawTextureCentered(center + mapOffset, texture, size);
+        }
+
+        private void DrawMiniMapCompassLabels(Vector2 center, float radius)
+        {
+            DrawMiniMapCompassLabel("N", Vector3.forward, center, radius);
+            DrawMiniMapCompassLabel("E", Vector3.right, center, radius);
+            DrawMiniMapCompassLabel("S", Vector3.back, center, radius);
+            DrawMiniMapCompassLabel("W", Vector3.left, center, radius);
+        }
+
+        private void DrawMiniMapCompassLabel(string text, Vector3 worldDirection, Vector2 center, float radius)
+        {
+            Vector2 direction = ProjectWorldDirectionToMiniMap(worldDirection);
+
+            if (direction.sqrMagnitude < 0.0001f)
+            {
+                return;
+            }
+
+            direction.Normalize();
+            const float labelSize = 24f;
+            Vector2 labelCenter = center + (direction * radius);
+            Rect labelRect = new Rect(labelCenter.x - labelSize * 0.5f, labelCenter.y - labelSize * 0.5f, labelSize, labelSize);
+            Color previousColor = GUI.color;
+            GUI.color = new Color(0f, 0.02f, 0.025f, 0.76f);
+            GUI.Label(new Rect(labelRect.x + 1f, labelRect.y + 1f, labelRect.width, labelRect.height), text, miniMapCompassLabelStyle);
+            GUI.color = previousColor;
+            GUI.Label(labelRect, text, miniMapCompassLabelStyle);
+        }
+
+        private Vector2 ProjectWorldOffsetToMiniMap(Vector3 worldOffset)
+        {
+            Vector3 flatForward = GetMiniMapForward();
+            Vector3 flatRight = new Vector3(flatForward.z, 0f, -flatForward.x);
+            return new Vector2(Vector3.Dot(worldOffset, flatRight), -Vector3.Dot(worldOffset, flatForward));
+        }
+
+        private Vector2 ProjectWorldDirectionToMiniMap(Vector3 worldDirection)
+        {
+            Vector3 flatForward = GetMiniMapForward();
+            Vector3 flatRight = new Vector3(flatForward.z, 0f, -flatForward.x);
+            return new Vector2(Vector3.Dot(worldDirection, flatRight), -Vector3.Dot(worldDirection, flatForward));
+        }
+
+        private Vector3 GetMiniMapForward()
+        {
+            Camera camera = Camera.main;
+            Vector3 forward = camera != null ? camera.transform.forward : Player.transform.forward;
+            forward.y = 0f;
+
+            if (forward.sqrMagnitude < 0.001f)
+            {
+                forward = Player.transform.forward;
+                forward.y = 0f;
+            }
+
+            return forward.sqrMagnitude > 0.001f ? forward.normalized : Vector3.forward;
         }
 
         private static void DrawTextureCentered(Vector2 center, Texture2D texture, float size)
@@ -952,6 +1005,47 @@ namespace Forest
                     else if (distance >= innerRadius)
                     {
                         texture.SetPixel(x, y, borderColor);
+                    }
+                    else
+                    {
+                        texture.SetPixel(x, y, fillColor);
+                    }
+                }
+            }
+
+            texture.Apply();
+            return texture;
+        }
+
+        private static Texture2D CreateMiniMapFrameTexture(int size, Color fillColor, Color edgeShadeColor, Color arcColor, float arcWidth)
+        {
+            Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+            {
+                name = "Forest Mini Map Frame"
+            };
+            Color clear = new Color(1f, 1f, 1f, 0f);
+            float center = (size - 1f) * 0.5f;
+            float outerRadius = center;
+            float innerArcRadius = Mathf.Max(0f, outerRadius - arcWidth);
+            float edgeShadeRadius = Mathf.Max(0f, outerRadius - 11f);
+
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float distance = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
+
+                    if (distance > outerRadius)
+                    {
+                        texture.SetPixel(x, y, clear);
+                    }
+                    else if (distance >= innerArcRadius)
+                    {
+                        texture.SetPixel(x, y, arcColor);
+                    }
+                    else if (distance >= edgeShadeRadius)
+                    {
+                        texture.SetPixel(x, y, edgeShadeColor);
                     }
                     else
                     {
