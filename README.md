@@ -125,16 +125,33 @@ The main PlayMode test file is:
 Assets/Tests/PlayMode/ForestBootstrapPlayModeTests.cs
 ```
 
-For command-line runs, use a local Unity executable for version `6000.4.6f1`, for example:
+For command-line runs, use the repo wrapper:
 
 ```sh
+Tools/run_playmode_tests.sh
+```
+
+The wrapper writes:
+
+```text
+Logs/playmode-test.log
+TestResults/playmode-results.xml
+```
+
+You can override the Unity binary with `UNITY_EXECUTABLE` if Unity is installed somewhere else.
+
+If you need to run Unity directly, use a local Unity executable for version `6000.4.6f1`:
+
+```sh
+mkdir -p Logs TestResults
 /Applications/Unity/Hub/Editor/6000.4.6f1/Unity.app/Contents/MacOS/Unity \
   -batchmode \
+  -nographics \
   -projectPath . \
   -runTests \
   -testPlatform PlayMode \
-  -testResults /tmp/forest-playmode-results.xml \
-  -quit
+  -testResults "$PWD/TestResults/playmode-results.xml" \
+  -logFile "$PWD/Logs/playmode-test.log"
 ```
 
 ## Key Files

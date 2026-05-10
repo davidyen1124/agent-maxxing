@@ -120,16 +120,26 @@ Primary PlayMode tests:
 Assets/Tests/PlayMode/ForestBootstrapPlayModeTests.cs
 ```
 
-Run from Unity Test Runner or from a local Unity executable:
+Run from Unity Test Runner or from the repo wrapper:
 
 ```sh
+Tools/run_playmode_tests.sh
+```
+
+The wrapper writes `Logs/playmode-test.log` and `TestResults/playmode-results.xml`.
+
+For a direct Unity invocation:
+
+```sh
+mkdir -p Logs TestResults
 /Applications/Unity/Hub/Editor/6000.4.6f1/Unity.app/Contents/MacOS/Unity \
   -batchmode \
+  -nographics \
   -projectPath . \
   -runTests \
   -testPlatform PlayMode \
-  -testResults /tmp/forest-playmode-results.xml \
-  -quit
+  -testResults "$PWD/TestResults/playmode-results.xml" \
+  -logFile "$PWD/Logs/playmode-test.log"
 ```
 
 Unity batchmode may fail in restricted shells if licensing is not initialized. If that happens, say so and ask the user to verify in the editor.
