@@ -14,9 +14,8 @@ namespace Forest
 {
     public sealed class ForestGameDirector : MonoBehaviour
     {
-        private const string ForestTaskTitlePrefix = "Forest task ";
-        private const string LegacyForestTaskTitlePrefix = "Game task ";
-        private const string ForestTaskCounterPrefsKey = "Forest.ForestTask.NextThreadNumber";
+        private const string UnderwaterTaskTitlePrefix = "Underwater task ";
+        private const string UnderwaterTaskCounterPrefsKey = "Underwater.UnderwaterTask.NextThreadNumber";
         private const float TerrainModeMaxCameraFarClip = 2200f;
         private const float TerrainModeMinCameraFarClip = 900f;
         private const float TerrainModeShadowDistance = 90f;
@@ -434,7 +433,7 @@ namespace Forest
             directorStatusLine = string.IsNullOrWhiteSpace(sync.detail)
                 ? $"Synced {ActiveThreadCount} roaming threads and {ArchivedAnimalCount} archived animals."
                 : sync.detail;
-            PersistNextWorkThreadNumber(FindHighestExistingForestTaskNumber() + 1);
+            PersistNextWorkThreadNumber(FindHighestExistingUnderwaterTaskNumber() + 1);
             UpdateNearestThreadStatus();
             SetWorldSyncProgress(totalWork, Mathf.Max(1, totalWork), "Thread animals ready");
             worldSyncLoading = false;
@@ -533,7 +532,7 @@ namespace Forest
 
             List<ForestThreadSnapshot> demoThreads = new List<ForestThreadSnapshot>
             {
-                CreateDemoThreadSnapshot("demo-thread-1", "Review terrain lighting", "Walking the forest path", "working", 3f, -12f, 16f),
+                CreateDemoThreadSnapshot("demo-thread-1", "Review terrain lighting", "Exploring the Underwater world", "working", 3f, -12f, 16f),
                 CreateDemoThreadSnapshot("demo-thread-2", "Tune thread pet behavior", "Testing animal animations", "responding", 9f, 14f, 10f),
                 CreateDemoThreadSnapshot("demo-thread-3", "Plan scene polish", "Waiting for app-server", "idle", 16f, 12f, -14f),
                 CreateDemoThreadSnapshot("demo-thread-4", "Document setup steps", "Ready for Codex bridge", "fresh", 1f, -18f, -10f)
@@ -1494,7 +1493,7 @@ namespace Forest
         private string BuildWorkThreadPrompt(string title, string request)
         {
             StringBuilder prompt = new StringBuilder();
-            prompt.Append("A player made a realtime voice request inside the Forest world.");
+            prompt.Append("A player made a realtime voice request inside the Underwater world.");
             prompt.AppendLine();
             prompt.AppendLine();
             prompt.Append("Thread title: ");
@@ -1557,7 +1556,7 @@ namespace Forest
             }
 
             float[] monoSamples = ExtractMonoSamples(clip, recordedSamples);
-            SetRealtimeVoiceStatus("Asking forest...");
+            SetRealtimeVoiceStatus("Asking Underwater...");
             LogRealtimeVoice($"Captured audio ready. recordedSamples={recordedSamples}, monoSamples={monoSamples.Length}, sampleRate={sampleRate}");
             _ = RequestRealtimeVoiceQuestionAsync(monoSamples, sampleRate);
         }
@@ -1595,12 +1594,12 @@ namespace Forest
         private string BuildRealtimeAnswerInstructions()
         {
             StringBuilder prompt = new StringBuilder();
-            prompt.Append("You are the voice assistant inside a Unity game named Forest. ");
+            prompt.Append("You are the voice assistant inside a Unity game named Underwater. ");
             prompt.Append("Answer the player's spoken question or request directly. ");
             prompt.Append("The player and game demo are in San Francisco. ");
             prompt.Append("Keep replies under 25 words unless the player asks for more detail. ");
             prompt.Append("Be concrete, warm, and a little funny; one tiny joke max. ");
-            prompt.Append("Answer from the local context below for questions about Codex threads, animals, archived animals, nearby or facing things, local app-server state, forest status, or anything in the current Forest world. ");
+            prompt.Append("Answer from the local context below for questions about Codex threads, animals, archived animals, nearby or facing things, local app-server state, Underwater status, or anything in the current Underwater world. ");
             prompt.Append("If the player asks you to change weather, fog, rain, storms, snow, clouds, drizzle, flurries, blizzards, lightning, lighting, morning, noon, afternoon, evening, dawn, day, sunset, or night, call set_world_atmosphere before answering. ");
             prompt.Append("If the player asks a work question, reports a bug, requests an investigation, or asks for a new feature specifically about this game or Unity project, call create_game_thread with the exact request before answering. ");
             prompt.Append("When the player asks what animal, thread, or thing is in front of them, answer from the facing animal context first. ");
@@ -1629,7 +1628,7 @@ namespace Forest
         {
             try
             {
-                SetRealtimeVoiceStatus("Asking forest...", false);
+                SetRealtimeVoiceStatus("Asking Underwater...", false);
                 string voice = apiSettings != null
                     ? apiSettings.OpenAiRealtimeVoiceOr(defaultOpenAiRealtimeVoice)
                     : defaultOpenAiRealtimeVoice;
@@ -1786,7 +1785,7 @@ namespace Forest
 
                 int nextThreadNumber = GetNextPersistentWorkThreadNumber();
                 string title = string.IsNullOrWhiteSpace(command.title)
-                    ? CreateForestTaskTitle(nextThreadNumber)
+                    ? CreateUnderwaterTaskTitle(nextThreadNumber)
                     : command.title.Trim();
                 string prompt = BuildWorkThreadPrompt(title, command.request);
 
@@ -2648,16 +2647,11 @@ namespace Forest
 
             candidate = candidate.Trim().TrimEnd('.', '?', '!');
 
-            const string forestPrefix = "Forest:";
-            const string gamePrefix = "Game:";
+            const string underwaterPrefix = "Underwater:";
 
-            if (candidate.StartsWith(forestPrefix, StringComparison.OrdinalIgnoreCase))
+            if (candidate.StartsWith(underwaterPrefix, StringComparison.OrdinalIgnoreCase))
             {
-                candidate = candidate.Substring(forestPrefix.Length).Trim();
-            }
-            else if (candidate.StartsWith(gamePrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                candidate = candidate.Substring(gamePrefix.Length).Trim();
+                candidate = candidate.Substring(underwaterPrefix.Length).Trim();
             }
 
             return Shorten(candidate, 72);
@@ -2747,7 +2741,7 @@ namespace Forest
                 PersistNextWorkThreadNumber(workThreadNumber + 1);
                 workThreadSpawnInFlight = false;
                 SetWorkThreadStatus($"Created '{title}' ({Shorten(threadId, 8)}).");
-                directorStatusLine = "Spawned a Codex work thread from the forest.";
+                directorStatusLine = "Spawned a Codex work thread from Underwater.";
             }
             catch (Exception ex)
             {
@@ -2806,8 +2800,8 @@ namespace Forest
 
         private int GetNextPersistentWorkThreadNumber()
         {
-            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(ForestTaskCounterPrefsKey, 1));
-            int worldNextNumber = FindHighestExistingForestTaskNumber() + 1;
+            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(UnderwaterTaskCounterPrefsKey, 1));
+            int worldNextNumber = FindHighestExistingUnderwaterTaskNumber() + 1;
             int sessionNextNumber = spawnedWorkThreadCount + 1;
             return Mathf.Max(savedNextNumber, worldNextNumber, sessionNextNumber);
         }
@@ -2815,24 +2809,24 @@ namespace Forest
         private void PersistNextWorkThreadNumber(int nextNumber)
         {
             int normalizedNextNumber = Mathf.Max(1, nextNumber);
-            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(ForestTaskCounterPrefsKey, 1));
+            int savedNextNumber = Mathf.Max(1, PlayerPrefs.GetInt(UnderwaterTaskCounterPrefsKey, 1));
 
             if (normalizedNextNumber <= savedNextNumber)
             {
                 return;
             }
 
-            PlayerPrefs.SetInt(ForestTaskCounterPrefsKey, normalizedNextNumber);
+            PlayerPrefs.SetInt(UnderwaterTaskCounterPrefsKey, normalizedNextNumber);
             PlayerPrefs.Save();
         }
 
-        private int FindHighestExistingForestTaskNumber()
+        private int FindHighestExistingUnderwaterTaskNumber()
         {
             int highestNumber = 0;
 
             foreach (KeyValuePair<string, ThreadAnimalAI> pair in activeThreads)
             {
-                if (pair.Value != null && TryReadForestTaskNumber(pair.Value.Title, out int threadNumber))
+                if (pair.Value != null && TryReadUnderwaterTaskNumber(pair.Value.Title, out int threadNumber))
                 {
                     highestNumber = Mathf.Max(highestNumber, threadNumber);
                 }
@@ -2840,7 +2834,7 @@ namespace Forest
 
             foreach (KeyValuePair<string, ArchivedThreadAnimal> pair in archivedAnimals)
             {
-                if (pair.Value != null && TryReadForestTaskNumber(pair.Value.Title, out int archivedNumber))
+                if (pair.Value != null && TryReadUnderwaterTaskNumber(pair.Value.Title, out int archivedNumber))
                 {
                     highestNumber = Mathf.Max(highestNumber, archivedNumber);
                 }
@@ -2849,12 +2843,12 @@ namespace Forest
             return highestNumber;
         }
 
-        private static string CreateForestTaskTitle(int number)
+        private static string CreateUnderwaterTaskTitle(int number)
         {
-            return $"{ForestTaskTitlePrefix}{Mathf.Max(1, number)}";
+            return $"{UnderwaterTaskTitlePrefix}{Mathf.Max(1, number)}";
         }
 
-        private static bool TryReadForestTaskNumber(string title, out int number)
+        private static bool TryReadUnderwaterTaskNumber(string title, out int number)
         {
             number = 0;
 
@@ -2865,19 +2859,12 @@ namespace Forest
 
             string trimmedTitle = title.Trim();
 
-            string prefix = ForestTaskTitlePrefix;
-
-            if (!trimmedTitle.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            if (!trimmedTitle.StartsWith(UnderwaterTaskTitlePrefix, StringComparison.OrdinalIgnoreCase))
             {
-                prefix = LegacyForestTaskTitlePrefix;
-
-                if (!trimmedTitle.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                {
-                    return false;
-                }
+                return false;
             }
 
-            string suffix = trimmedTitle.Substring(prefix.Length).Trim();
+            string suffix = trimmedTitle.Substring(UnderwaterTaskTitlePrefix.Length).Trim();
             return int.TryParse(suffix, out number) && number > 0;
         }
 
@@ -3467,7 +3454,7 @@ namespace Forest
                 }
             }
 
-            throw new InvalidOperationException("Unable to find a supported shader for the forest slice.");
+            throw new InvalidOperationException("Unable to find a supported shader for the Underwater slice.");
         }
     }
 }

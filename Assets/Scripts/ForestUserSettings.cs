@@ -7,7 +7,7 @@ namespace Forest
     [Serializable]
     internal sealed class ForestUserSettings
     {
-        public const string RelativePath = "UserSettings/ForestApiSettings.json";
+        public const string RelativePath = "UserSettings/UnderwaterApiSettings.json";
 
         public string openAiApiKey;
         public string openAiRealtimeModel;

@@ -288,7 +288,7 @@ namespace Forest
 
         private string BuildAnswerSessionInstructions()
         {
-            string instructions = "Answer short push-to-talk voice questions and requests for the Unity game Forest.";
+            string instructions = "Answer short push-to-talk voice questions and requests for the Unity game Underwater.";
 
             if (CanUseWorldCommands())
             {
@@ -326,7 +326,7 @@ namespace Forest
             {
                 ["type"] = "function",
                 ["name"] = "set_world_atmosphere",
-                ["description"] = "Change the visible Forest Unity world atmosphere. Use this for player requests about weather, rain, storms, fog, snow, clouds, drizzle, flurries, blizzards, lightning, lighting, or time of day.",
+                ["description"] = "Change the visible Underwater Unity world atmosphere. Use this for player requests about weather, rain, storms, fog, snow, clouds, drizzle, flurries, blizzards, lightning, lighting, or time of day.",
                 ["parameters"] = new Dictionary<string, object>
                 {
                     ["type"] = "object",

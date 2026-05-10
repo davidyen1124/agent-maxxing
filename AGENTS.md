@@ -91,7 +91,7 @@ Active pets use terrain-grounded movement when `director.UsesSceneTerrain` is tr
 Optional voice settings are loaded from:
 
 ```text
-UserSettings/ForestApiSettings.json
+UserSettings/UnderwaterApiSettings.json
 ```
 
 This file may contain API keys and must not be committed. Expected fields are defined in `ForestUserSettings`.
@@ -147,7 +147,7 @@ Prefer focused commits. Do not stage unrelated Unity editor churn from `ProjectS
 ## Practical Warnings
 
 - Do not delete `.meta` files for assets that remain in the project.
-- Do not commit `UserSettings/ForestApiSettings.json`.
+- Do not commit `UserSettings/UnderwaterApiSettings.json`.
 - Do not use destructive git commands unless explicitly requested.
 - Keep runtime animal prefabs under `Assets/Resources/ThreadAnimals`; `Resources.Load` depends on that path.
 - Imported asset YAML often contains trailing whitespace. Avoid broad mechanical whitespace rewrites across imported Unity assets unless the user asks.

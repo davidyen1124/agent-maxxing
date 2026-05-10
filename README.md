@@ -1,6 +1,6 @@
-# Forest
+# Underwater
 
-Forest is a Unity 6 project that turns Codex threads into a live 3D world. The current default scene is a terrain demo environment with first-person movement, 3D thread animals, speech bubbles above animals, a minimap, realtime atmosphere controls, and optional voice Q&A.
+Underwater is a Unity 6 project that turns Codex threads into a live 3D world. The current default scene is a terrain demo environment with first-person movement, 3D thread animals, speech bubbles above animals, a minimap, realtime atmosphere controls, and optional voice Q&A.
 
 ## Requirements
 
@@ -51,7 +51,7 @@ The scene works without the Codex app-server. If the bridge does not receive a t
 Voice settings are read from:
 
 ```text
-UserSettings/ForestApiSettings.json
+UserSettings/UnderwaterApiSettings.json
 ```
 
 This file is local user state and should not be committed. Example:
