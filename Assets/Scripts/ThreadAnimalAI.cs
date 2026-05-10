@@ -106,7 +106,7 @@ namespace Forest
             threadId = snapshot.id ?? threadId;
             title = string.IsNullOrWhiteSpace(snapshot.title) ? "Untitled thread" : snapshot.title.Trim();
             phase = string.IsNullOrWhiteSpace(snapshot.phase) ? "idle" : snapshot.phase.Trim().ToLowerInvariant();
-            statusMessage = string.IsNullOrWhiteSpace(snapshot.statusMessage) ? BuildFallbackStatusMessage(phase) : snapshot.statusMessage.Trim();
+            statusMessage = string.IsNullOrWhiteSpace(snapshot.statusMessage) ? string.Empty : snapshot.statusMessage.Trim();
             ageMinutes = Mathf.Max(0f, snapshot.ageMinutes);
 
             if (snapshot.position != null)
@@ -450,26 +450,6 @@ namespace Forest
             return CodexAnimalAnimationState.Idle;
         }
 
-        private static string BuildFallbackStatusMessage(string phase)
-        {
-            switch ((phase ?? string.Empty).Trim().ToLowerInvariant())
-            {
-                case "failed":
-                case "failure":
-                case "error":
-                case "warning":
-                    return "Blocked";
-                case "fresh":
-                case "responding":
-                case "working":
-                    return "Thinking";
-                case "idle":
-                    return "Idle";
-                default:
-                    return "Info";
-            }
-        }
-
         private string BuildBubbleMessage()
         {
             if (string.Equals(phase, "idle", System.StringComparison.OrdinalIgnoreCase))
@@ -479,7 +459,7 @@ namespace Forest
 
             if (!ShouldShowBubbleMessage(statusMessage))
             {
-                return IsImportantPhase() ? BuildFallbackStatusMessage(phase) : string.Empty;
+                return string.Empty;
             }
 
             return statusMessage;

@@ -39,24 +39,24 @@ namespace Forest
             }
         }
 
-        public string OpenAiRealtimeModelOr(string fallback)
+        public string OpenAiRealtimeModelOr(string defaultValue)
         {
-            return string.IsNullOrWhiteSpace(openAiRealtimeModel) ? fallback : openAiRealtimeModel.Trim();
+            return string.IsNullOrWhiteSpace(openAiRealtimeModel) ? defaultValue : openAiRealtimeModel.Trim();
         }
 
-        public string OpenAiRealtimeVoiceOr(string fallback)
+        public string OpenAiRealtimeVoiceOr(string defaultValue)
         {
-            return string.IsNullOrWhiteSpace(openAiRealtimeVoice) ? fallback : openAiRealtimeVoice.Trim();
+            return string.IsNullOrWhiteSpace(openAiRealtimeVoice) ? defaultValue : openAiRealtimeVoice.Trim();
         }
 
-        public int VoiceSampleRateOr(int fallback)
+        public int VoiceSampleRateOr(int defaultValue)
         {
-            return voiceSampleRate > 0 ? voiceSampleRate : fallback;
+            return voiceSampleRate > 0 ? voiceSampleRate : defaultValue;
         }
 
-        public float VoiceMaxCaptureSecondsOr(float fallback)
+        public float VoiceMaxCaptureSecondsOr(float defaultValue)
         {
-            return voiceMaxCaptureSeconds > 0f ? voiceMaxCaptureSeconds : fallback;
+            return voiceMaxCaptureSeconds > 0f ? voiceMaxCaptureSeconds : defaultValue;
         }
     }
 }

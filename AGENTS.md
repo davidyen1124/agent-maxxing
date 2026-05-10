@@ -20,7 +20,7 @@ This repo is a Unity 6 project. Treat Unity-generated YAML, `.meta` files, impor
 
 `ForestDirectorBridge` connects to the local Codex app-server and converts app-server thread/archive events into Unity snapshots. It calls `ForestGameDirector.SyncThreadWorld(...)`.
 
-If the app-server is not running, `ForestGameDirector` spawns local demo thread animals after a short fallback delay. Demo snapshots use the `demo-fallback` source and `demo-*` IDs so a later real app-server sync can replace them cleanly.
+Thread animals are created only from local app-server snapshots. If the app-server is not running, the terrain scene still boots, but no thread animals are synthesized locally.
 
 Thread pets are split into behavior and visual layers:
 

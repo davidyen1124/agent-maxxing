@@ -117,11 +117,61 @@ namespace Forest.Tests
                 });
 
                 Assert.That(animal.BubbleMessage, Is.EqualTo("Thinking"));
+
+                animal.ApplySnapshot(new ForestThreadSnapshot
+                {
+                    id = "thread-1",
+                    title = "Review recent conversations",
+                    statusMessage = "",
+                    phase = "working"
+                });
+
+                Assert.That(animal.BubbleMessage, Is.EqualTo(string.Empty));
             }
             finally
             {
                 Object.DestroyImmediate(gameObject);
             }
+        }
+
+        [Test]
+        public void UnderwaterTaskNumberParserRejectsLegacyTaskPrefixes()
+        {
+            MethodInfo method = typeof(ForestGameDirector).GetMethod(
+                "TryReadUnderwaterTaskNumber",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.That(method, Is.Not.Null);
+
+            object[] currentArgs = { "Underwater task 42", 0 };
+            Assert.That(method.Invoke(null, currentArgs), Is.EqualTo(true));
+            Assert.That(currentArgs[1], Is.EqualTo(42));
+
+            object[] forestArgs = { "Forest task 42", 0 };
+            Assert.That(method.Invoke(null, forestArgs), Is.EqualTo(false));
+            Assert.That(forestArgs[1], Is.EqualTo(0));
+
+            object[] gameArgs = { "Game task 42", 0 };
+            Assert.That(method.Invoke(null, gameArgs), Is.EqualTo(false));
+            Assert.That(gameArgs[1], Is.EqualTo(0));
+        }
+
+        [Test]
+        public void RealtimeThreadTitleCleanerKeepsLegacyPrefixes()
+        {
+            MethodInfo method = typeof(ForestGameDirector).GetMethod(
+                "CleanRealtimeThreadTitle",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.That(method, Is.Not.Null);
+
+            Assert.That(
+                method.Invoke(null, new object[] { "Underwater: Map terrain paths", "" }),
+                Is.EqualTo("Map terrain paths"));
+            Assert.That(
+                method.Invoke(null, new object[] { "Forest: Map terrain paths", "" }),
+                Is.EqualTo("Forest: Map terrain paths"));
+            Assert.That(
+                method.Invoke(null, new object[] { "Game: Map terrain paths", "" }),
+                Is.EqualTo("Game: Map terrain paths"));
         }
 
         [Test]

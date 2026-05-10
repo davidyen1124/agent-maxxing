@@ -7,7 +7,7 @@ Underwater is a Unity 6 project that turns Codex threads into a live 3D world. T
 - Unity `6000.4.6f1`
 - Git LFS
 - macOS, Windows, or Linux supported by Unity 6
-- Optional: a local Codex app-server that exposes `ws://127.0.0.1:4500`
+- A local Codex app-server that exposes `ws://127.0.0.1:4500` for live thread animals
 - Optional: OpenAI API key for realtime voice Q&A
 
 ## Install
@@ -36,7 +36,7 @@ Underwater is a Unity 6 project that turns Codex threads into a live 3D world. T
    Assets/TerrainDemoScene_URP/Scenes/TerrainDemoScene.unity
    ```
 
-6. Optional: in a separate terminal, start the Codex app-server for live thread pets:
+6. In a separate terminal, start the Codex app-server for live thread pets:
 
    ```sh
    codex app-server --listen ws://127.0.0.1:4500
@@ -44,7 +44,7 @@ Underwater is a Unity 6 project that turns Codex threads into a live 3D world. T
 
 7. Press Play.
 
-The scene works without the Codex app-server. If the bridge does not receive a thread sync shortly after Play starts, Unity spawns local demo thread pets so the terrain scene still has animals. Live Codex thread data requires the bridge to connect to `ws://127.0.0.1:4500`.
+Live Codex thread animals require the bridge to connect to `ws://127.0.0.1:4500`. Without the app-server, the terrain, player, atmosphere, and HUD still boot, but no local demo thread animals are created.
 
 ## Optional Voice Setup
 
@@ -93,7 +93,7 @@ This file is local user state and should not be committed. Example:
 
 Active animals roam around the terrain, choose targets near the player/camera/home point, sample terrain height through `ForestGameDirector.GetSurfaceY(...)`, and drive imported animal Animator parameters directly. Archived animals idle and hop near their saved terrain position.
 
-When the Codex app-server is not running, `ForestGameDirector` creates a small local demo thread set after a short fallback delay. Once the app-server sends a real sync, the real thread IDs replace the demo animals.
+Thread animals are created only from app-server snapshots. Empty status messages remain empty, so the app-server is responsible for sending displayable activity text when a non-idle thread should speak.
 
 ## Assets
 
