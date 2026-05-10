@@ -1,13 +1,13 @@
-# Underwater
+# agent-maxxing
 
-Underwater is a Unity 6 project that turns Codex threads into a live 3D world. The current default scene is a terrain demo environment with first-person movement, 3D thread animals, speech bubbles above animals, a minimap, realtime atmosphere controls, and optional voice Q&A.
+`agent-maxxing` is a Unity 6 project that turns Codex threads into a live 3D world. The default scene is a terrain demo environment with first-person movement, 3D thread animals, speech bubbles, a minimap, realtime atmosphere controls, and optional voice Q&A.
 
 ## Requirements
 
 - Unity `6000.4.6f1`
 - Git LFS
 - macOS, Windows, or Linux supported by Unity 6
-- A local Codex app-server that exposes `ws://127.0.0.1:4500` for live thread animals
+- A local Codex app-server exposing `ws://127.0.0.1:4500` for live thread animals
 - Optional: OpenAI API key for realtime voice Q&A
 
 ## Install
@@ -36,19 +36,19 @@ Underwater is a Unity 6 project that turns Codex threads into a live 3D world. T
    Assets/TerrainDemoScene_URP/Scenes/TerrainDemoScene.unity
    ```
 
-6. In a separate terminal, start the Codex app-server for live thread pets:
+6. In a separate terminal, start the Codex app-server for live thread animals:
 
    ```sh
    codex app-server --listen ws://127.0.0.1:4500
    ```
 
-7. Press Play.
+7. Press Play in Unity.
 
-Live Codex thread animals require the bridge to connect to `ws://127.0.0.1:4500`. Without the app-server, the terrain, player, atmosphere, and HUD still boot, but no local demo thread animals are created.
+The terrain, player, atmosphere, and HUD boot without the app-server. Live Codex thread animals require the websocket bridge at `ws://127.0.0.1:4500`.
 
 ## Optional Voice Setup
 
-Voice settings are read from:
+Voice settings are read from the current runtime settings file:
 
 ```text
 UserSettings/UnderwaterApiSettings.json
@@ -70,16 +70,36 @@ This file is local user state and should not be committed. Example:
 
 ## Controls
 
+Keyboard and mouse:
+
 - `W/A/S/D`: Move
-- Mouse: Look
+- Mouse: Look while the cursor is locked
 - `Left Shift` / `Right Shift`: Sprint
 - `Space`: Jump
-- `E`: Spawn a Codex work thread from the world
-- Hold `V`: Record a realtime voice question
-- Release `V`: Send the voice question
-- `H`: Toggle thread HUD visibility, including pet speech bubbles and minimap
+- `H`: Toggle thread HUD visibility, including animal speech bubbles and minimap
+- Hold `V`: Record a voice request
+- Release `V`: Send the voice request
 - `Esc`: Unlock mouse cursor
 - Left click: Re-lock mouse cursor
+
+Gamepad:
+
+- Left stick: Move
+- Right stick: Look
+- Left stick button: Sprint
+- South face button: Jump
+
+## Voice Control Features
+
+Voice control is push-to-talk on `V` and requires `openAiApiKey` in `UserSettings/UnderwaterApiSettings.json`. The runtime records from the first available microphone, sends the clip to the OpenAI Realtime API, and plays the spoken answer in-game.
+
+Supported voice requests include:
+
+- Ask short questions about the current Unity world, visible thread animals, archived animals, nearby or facing animals, and app-server state.
+- Change the realtime atmosphere, including time of day, lighting, fog, rain, storms, snow, clouds, and intensity.
+- Create a Codex work thread for game-specific questions, bug reports, investigations, or feature requests.
+
+Creating work threads also requires the local Codex app-server to be connected at `ws://127.0.0.1:4500`.
 
 ## How Thread Animals Work
 
@@ -89,7 +109,7 @@ This file is local user state and should not be committed. Example:
 - Archived threads use `ArchivedThreadAnimal`.
 - 3D animal visuals are created by `ThreadAnimalVisual`.
 - Animal prefabs live in `Assets/Resources/ThreadAnimals`.
-- Imported animal movement/input scripts are disabled at runtime; movement is controlled by our own AI components.
+- Imported animal movement/input scripts are disabled at runtime; movement is controlled by project AI components.
 
 Active animals roam around the terrain, choose targets near the player/camera/home point, sample terrain height through `ForestGameDirector.GetSurfaceY(...)`, and drive imported animal Animator parameters directly. Archived animals idle and hop near their saved terrain position.
 
@@ -99,11 +119,11 @@ Thread animals are created only from app-server snapshots. Empty status messages
 
 Large binary assets are tracked with Git LFS. This includes the Unity Terrain demo assets and imported 3D animal meshes/textures.
 
-Important runtime asset roots:
+Important asset directories:
 
-- `Assets/TerrainDemoScene_URP`
-- `Assets/ithappy/Animals_FREE`
-- `Assets/Resources/ThreadAnimals`
+- `Assets/TerrainDemoScene_URP`: default scene, terrain, lighting, foliage, rocks, skybox, and URP terrain demo assets
+- `Assets/Resources/ThreadAnimals`: runtime-loaded animal prefabs used by `ThreadAnimalVisual`
+- `Assets/ithappy/Animals_FREE`: imported animal meshes, materials, textures, animations, and supporting scripts referenced by the thread animal prefabs
 
 If assets appear missing, run:
 
@@ -113,16 +133,24 @@ git lfs pull
 
 ## Tests
 
-Use Unity Test Runner for PlayMode tests:
+The project currently has one PlayMode test assembly:
 
 ```text
-Window > General > Test Runner > PlayMode
+Assets/Tests/PlayMode/Forest.PlayModeTests.asmdef
 ```
 
-The main PlayMode test file is:
+The main test file is:
 
 ```text
 Assets/Tests/PlayMode/ForestBootstrapPlayModeTests.cs
+```
+
+It covers scene bootstrap, first-person runtime setup, terrain lighting/atmosphere behavior, precipitation rendering, animal speech bubbles, thread-title parsing, random animal actions, bridge reasoning summaries, and voice atmosphere command aliases.
+
+To run it in the Unity editor, use:
+
+```text
+Window > General > Test Runner > PlayMode
 ```
 
 For command-line runs, use the repo wrapper:
@@ -131,16 +159,22 @@ For command-line runs, use the repo wrapper:
 Tools/run_playmode_tests.sh
 ```
 
-The wrapper writes:
+The wrapper uses Unity `6000.4.6f1` by default and writes:
 
 ```text
 Logs/playmode-test.log
 TestResults/playmode-results.xml
 ```
 
-You can override the Unity binary with `UNITY_EXECUTABLE` if Unity is installed somewhere else.
+You can override paths with environment variables:
 
-If you need to run Unity directly, use a local Unity executable for version `6000.4.6f1`:
+```text
+UNITY_EXECUTABLE=/path/to/Unity
+PLAYMODE_TEST_LOG=/path/to/playmode-test.log
+PLAYMODE_TEST_RESULTS=/path/to/playmode-results.xml
+```
+
+If you need to run Unity directly, use:
 
 ```sh
 mkdir -p Logs TestResults
@@ -156,11 +190,14 @@ mkdir -p Logs TestResults
 
 ## Key Files
 
-- `Assets/Scripts/ForestGameDirector.cs`: world lifecycle, terrain setup, player creation, UI, minimap, thread spawning, voice flow
-- `Assets/Scripts/ForestDirectorBridge.cs`: Codex app-server websocket bridge
-- `Assets/Scripts/ForestPlayerController.cs`: first-person movement and keyboard shortcuts
-- `Assets/Scripts/ThreadAnimalAI.cs`: active thread animal behavior
-- `Assets/Scripts/ArchivedThreadAnimal.cs`: archived thread animal behavior
-- `Assets/Scripts/ThreadAnimalVisual.cs`: 3D animal visual loading, scaling, animation, and imported component disabling
-- `Assets/Scripts/OpenAIRealtimeClient.cs`: realtime voice client and tool handling
-- `Assets/Scripts/ForestUserSettings.cs`: local user settings loader
+- `Assets/Scripts/ForestBootstrap.cs`: runtime scene hook that creates the `ForestGameDirector` when a scene loads
+- `Assets/Scripts/ForestGameDirector.cs`: central runtime coordinator for terrain setup, player creation, HUD/minimap UI, atmosphere, thread animals, voice flow, and work-thread creation
+- `Assets/Scripts/ForestDirectorBridge.cs`: Codex app-server websocket bridge, thread/archive mirroring, work-thread creation, and lightweight JSON handling
+- `Assets/Scripts/ForestDirectorProtocol.cs`: serializable snapshot DTOs shared by the director, bridge, animals, and voice context
+- `Assets/Scripts/ForestPlayerController.cs`: first-person keyboard, mouse, and gamepad movement plus HUD and push-to-talk input
+- `Assets/Scripts/ThreadAnimalAI.cs`: active thread animal state, roaming behavior, speech-bubble text, and animation state selection
+- `Assets/Scripts/ArchivedThreadAnimal.cs`: archived thread animal idle/hop behavior and snapshot export
+- `Assets/Scripts/ThreadAnimalVisual.cs`: runtime animal prefab loading from `Resources/ThreadAnimals`, scaling, animation, and imported component disabling
+- `Assets/Scripts/CodexAnimalAnimationState.cs`: shared animal animation state enum
+- `Assets/Scripts/OpenAIRealtimeClient.cs`: OpenAI Realtime voice client, audio I/O, and voice tool execution
+- `Assets/Scripts/ForestUserSettings.cs`: local voice/API settings loader
