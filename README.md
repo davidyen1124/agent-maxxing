@@ -1,6 +1,8 @@
 # agent-maxxing
 
-`agent-maxxing` is a Unity 6 project that turns Codex threads into a live 3D world. The default scene is a terrain demo environment with first-person movement, 3D thread animals, speech bubbles, a minimap, realtime atmosphere controls, and optional voice Q&A.
+`agent-maxxing` is the Codex Thread Operating System for embodied AI workflow orchestration. It turns every Codex thread into a live 3D agent animal, then wraps the whole thing in the infrastructure layer the first wave of chat tools forgot: spatial context, realtime state, closed-loop voice control, minimap observability, atmosphere governance, and a Unity-native execution surface built to scale past the prompt box.
+
+Generation was the demo. The real category shift is making agent work visible, queryable, and operational inside an adaptive 3D world. The default scene ships that OS layer as a terrain environment with first-person movement, thread animals, speech bubbles, realtime atmosphere controls, optional voice Q&A, and enough workflow intelligence to make your backlog feel almost on brand.
 
 ## Requirements
 
